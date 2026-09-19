@@ -183,11 +183,16 @@ https://host:port → https://host (443) → http://host:port → http://host (8
 |---|---|---|
 | `a=candidate:*` | IP→公网IP，端口→19133，**全量**（含 127.0.0.1/内网IP/IPv6/srflx，可只保留一条） | 漏改一条客户端就可能选它 |
 | `c=` 连接行 | 地址→公网IP | 部分栈校验 |
+| `m=` 行端口 | **同步改为公网端口** | ⚠️ 实测修正：BDS 1.26.60 的 answer 中 `m=` 是**真实数据端口**（非占位符 9），与 candidate 不一致会导致客户端校验失败 |
 | `a=ice-ufrag` | **保持原样** | 路由键 |
 | `a=fingerprint` / `a=identity` | **保持原样** | DTLS 端到端与身份绑定 |
-| `m=` 行端口 | 不动 | 端口 9 是占位符 |
 
 拦截前先确认 body 真是 SDP：answer 也可能是纯数字错误码（按 Content-Type 或 `v=` 开头判断）。
+
+**实测补充（BDS 1.26.60，2026-09-19 验证）**：
+- BDS answer 的 `a=setup:active`（服务端主动发起 DTLS ClientHello），fingerprint/identity 端到端校验通过，代理透明转发可行。
+- **BDS 会把数据面端口池（默认 19132–19139，每连接递增分配）预绑定到每张网卡地址上**。Windows/通用 socket 规则下"更具体的绑定优先"，代理公网 UDP 端口若落在池内会被 BDS 截包（绑定 0.0.0.0 也收不到）。**代理数据面端口必须避开 BDS 端口池**。
+- 同网段调试时，BDS 会直接对 offer 中的客户端局域网 candidate 反向建连、旁路代理；如需强制验证代理路径，可将 offer 中的客户端 candidate 替换为不可达占位地址，BDS 将依赖 ICE peer-reflexive 等客户端 check 经代理到达后建连（NetherProxy 的 `-force-relay` 开关）。
 
 ### 7.5 会话管理
 

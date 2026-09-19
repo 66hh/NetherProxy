@@ -1,0 +1,7 @@
+# 编译产物
+/netherproxy.exe
+/netherproxy
+
+# 调试输出
+*.log
+*.pcap

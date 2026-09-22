@@ -18,6 +18,7 @@ import (
 
 	"NetherProxy/internal/conf"
 	"NetherProxy/internal/logger"
+	"NetherProxy/internal/server/multiplexer"
 )
 
 var (
@@ -50,14 +51,16 @@ type Gateway struct {
 }
 
 // New 创建网关服务, 监听地址/TLS/metrics 开关取启动时配置, 之后重载不生效
-func New(store *conf.Store) *Gateway {
+func New(store *conf.Store, mux *multiplexer.Multiplexer, tracker *multiplexer.EntryTracker) *Gateway {
 	cfg := store.Get().Gateway
 	router := gin.New()
 	router.Use(gin.Recovery(), accessLog())
 
 	// NetherNet 信令端点, 客户端硬编码路径, 必须挂在根路径
-	join := newJoinHandler(store)
+	balancer := newEntryBalancer(store, mux.Table(), tracker)
+	join := newJoinHandler(store, balancer, mux)
 	router.GET("/v1/join", join.motd)
+	router.POST("/v1/join/:networkID", join.offer)
 
 	api := router.Group("/api")
 
@@ -73,6 +76,9 @@ func New(store *conf.Store) *Gateway {
 	api.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
+
+	// 线路状态与心跳统计
+	api.GET("/entry", tokenAuth(store), handleEntryStatus(store, tracker, balancer))
 
 	registerConfigAPI(api, store)
 

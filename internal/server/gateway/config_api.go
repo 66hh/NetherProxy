@@ -7,6 +7,7 @@ import (
 
 	"NetherProxy/internal/conf"
 	"NetherProxy/internal/logger"
+	"NetherProxy/internal/server/multiplexer"
 )
 
 // registerConfigAPI 注册配置管理路由, 全部强制 Bearer 认证
@@ -58,6 +59,33 @@ func handleReloadConfig(store *conf.Store) gin.HandlerFunc {
 	}
 }
 
+// handleEntryStatus 返回各线路的配置、路由状态与心跳统计
+func handleEntryStatus(store *conf.Store, tracker *multiplexer.EntryTracker, balancer *entryBalancer) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		stats := tracker.Snapshot()
+		counts := balancer.Snapshot()
+		entries := make([]gin.H, 0)
+		cfg := store.Get()
+		for i := range cfg.Entry {
+			e := &cfg.Entry[i]
+			key := multiplexer.EntryKey(e)
+			entry := gin.H{
+				"key":             key,
+				"enable":          e.Enable,
+				"max_session":     e.MaxSession,
+				"heartbeat":       e.Heartbeat,
+				"healthy":         tracker.Healthy(key),
+				"active_sessions": counts[key],
+			}
+			if s, ok := stats[key]; ok {
+				entry["stats"] = s
+			}
+			entries = append(entries, entry)
+		}
+		c.JSON(http.StatusOK, gin.H{"entries": entries})
+	}
+}
+
 // applyHot 应用支持热生效的配置项
 func applyHot(cfg *conf.Conf) {
 	// BDS 路由与 gateway.token 由使用方每次从 Store 读取, 天然热生效
@@ -65,10 +93,13 @@ func applyHot(cfg *conf.Conf) {
 }
 
 // restartRequired 判断新旧配置差异是否涉及只能重启生效的项:
-// gateway 监听地址/TLS/metrics 开关, 以及日志的输出格式与文件配置
+// gateway 监听地址/TLS/metrics 开关, multiplexer 监听地址, 以及日志的输出格式与文件配置
 func restartRequired(old, new *conf.Conf) bool {
 	og, ng := old.Gateway, new.Gateway
 	if og.Host != ng.Host || og.Port != ng.Port || og.TLS != ng.TLS || og.Metrics != ng.Metrics {
+		return true
+	}
+	if old.Multiplexer != new.Multiplexer {
 		return true
 	}
 	ol, nl := old.Log, new.Log

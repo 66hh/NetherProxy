@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // TLS配置
@@ -74,12 +75,34 @@ func (b BDSConf) MatchDomain(host string) bool {
 	}
 }
 
+// 线路心跳配置, 代理主动探测线路可达性并记录统计
+type HeartbeatConf struct {
+	Enable      bool   `yaml:"enable" json:"enable"`             // 是否启用心跳探测
+	AutoOffline bool   `yaml:"auto_offline" json:"auto_offline"` // 连续失败是否自动下线线路 (false 时仅记录统计与日志)
+	Interval    string `yaml:"interval" json:"interval"`         // 心跳间隔, 如 "5s"
+	Timeout     string `yaml:"timeout" json:"timeout"`           // 单次响应超时, 如 "2s"
+	Retries     int    `yaml:"retries" json:"retries"`           // 连续失败多少次后判定无响应
+}
+
+// IntervalDuration 解析心跳间隔
+func (h HeartbeatConf) IntervalDuration() time.Duration {
+	d, _ := time.ParseDuration(h.Interval)
+	return d
+}
+
+// TimeoutDuration 解析单次响应超时
+func (h HeartbeatConf) TimeoutDuration() time.Duration {
+	d, _ := time.ParseDuration(h.Timeout)
+	return d
+}
+
 // 公网线路配置 (客户端实际连接的地址需要映射到复用器上), 支持填写多条线路网关将会自动平均
 type EntryConf struct {
-	Enable     bool   `yaml:"enable" json:"enable"`           // 是否启用
-	Host       string `yaml:"host" json:"host"`               // 公网线路主机
-	Port       int    `yaml:"port" json:"port"`               // 公网线路端口
-	MaxSession int    `yaml:"max_session" json:"max_session"` // 最大会话数
+	Enable     bool          `yaml:"enable" json:"enable"`           // 是否启用
+	Host       string        `yaml:"host" json:"host"`               // 公网线路主机
+	Port       int           `yaml:"port" json:"port"`               // 公网线路端口
+	MaxSession int           `yaml:"max_session" json:"max_session"` // 最大会话数, 0 表示不限制
+	Heartbeat  HeartbeatConf `yaml:"heartbeat" json:"heartbeat"`     // 心跳探测配置
 }
 
 // 日志配置
@@ -188,6 +211,18 @@ func (c *Conf) Validate() error {
 
 		if entry.MaxSession < 0 {
 			errs = append(errs, fmt.Errorf("entry[%d].max_session: must not be negative", i))
+		}
+
+		if entry.Heartbeat.Enable {
+			if _, err := time.ParseDuration(entry.Heartbeat.Interval); err != nil || entry.Heartbeat.IntervalDuration() <= 0 {
+				errs = append(errs, fmt.Errorf("entry[%d].heartbeat.interval: invalid duration %q", i, entry.Heartbeat.Interval))
+			}
+			if _, err := time.ParseDuration(entry.Heartbeat.Timeout); err != nil || entry.Heartbeat.TimeoutDuration() <= 0 {
+				errs = append(errs, fmt.Errorf("entry[%d].heartbeat.timeout: invalid duration %q", i, entry.Heartbeat.Timeout))
+			}
+			if entry.Heartbeat.Retries < 1 {
+				errs = append(errs, fmt.Errorf("entry[%d].heartbeat.retries: must be >= 1", i))
+			}
 		}
 	}
 

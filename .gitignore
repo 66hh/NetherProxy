@@ -6,5 +6,6 @@
 *.log
 *.pcap
 
-# 运行期生成的配置
+# 运行期生成的配置与统计
 /config.yml
+/entry_stats.json

@@ -12,9 +12,15 @@ import (
 	"NetherProxy/internal/conf"
 	"NetherProxy/internal/logger"
 	"NetherProxy/internal/server/gateway"
+	"NetherProxy/internal/server/multiplexer"
+	"NetherProxy/internal/session"
 )
 
-const configPath = "config.yml"
+const (
+	configPath = "config.yml"
+	// entryStatsPath 是线路心跳统计的持久化文件
+	entryStatsPath = "entry_stats.json"
+)
 
 func main() {
 
@@ -48,7 +54,20 @@ func main() {
 
 	logger.Info("NetherProxy started")
 
-	gw := gateway.New(conf.NewStore(configPath, cfg))
+	store := conf.NewStore(configPath, cfg)
+	table := session.NewTable()
+	tracker := multiplexer.NewEntryTracker(entryStatsPath)
+
+	mux := multiplexer.New(store, table, tracker)
+	if err := mux.Start(); err != nil {
+		logger.Error("multiplexer start failed", "err", err)
+		os.Exit(1)
+	}
+
+	heartbeat := multiplexer.NewHeartbeat(store, tracker)
+	heartbeat.Start()
+
+	gw := gateway.New(store, mux, tracker)
 
 	go func() {
 		if err := gw.Start(); err != nil {
@@ -69,6 +88,14 @@ func main() {
 	if err := gw.Shutdown(ctx); err != nil {
 		logger.Error("gateway shutdown error", "err", err)
 	}
+
+	// 逆序关闭: 先停探测与转发, 再回收会话, 最后落盘统计
+	heartbeat.Close()
+	if err := mux.Close(); err != nil {
+		logger.Error("multiplexer close error", "err", err)
+	}
+	table.Close()
+	tracker.Close()
 
 	logger.Info("NetherProxy stopped")
 }

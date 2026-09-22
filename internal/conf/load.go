@@ -51,6 +51,13 @@ func Default() *Conf {
 				Host:       "127.0.0.1",
 				Port:       19131,
 				MaxSession: 100,
+				Heartbeat: HeartbeatConf{
+					Enable:      false,
+					AutoOffline: true,
+					Interval:    "5s",
+					Timeout:     "2s",
+					Retries:     3,
+				},
 			},
 		},
 	}

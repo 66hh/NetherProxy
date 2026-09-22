@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"io"
 	"net"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 
 	"NetherProxy/internal/conf"
 	"NetherProxy/internal/logger"
+	"NetherProxy/internal/server/multiplexer"
 )
 
 // joinBodyLimit 是信令请求的 body 上限, 与原版一致 1 MiB
@@ -21,13 +23,17 @@ const joinBodyLimit = 1 << 20
 // joinHandler 处理 NetherNet HTTP 信令端点 (/v1/join),
 // 按请求 Host 匹配 BDS 配置并透传; 后端列表从配置中心动态读取, 重载即时生效
 type joinHandler struct {
-	store  *conf.Store
-	client *http.Client
+	store    *conf.Store
+	balancer *entryBalancer
+	mux      *multiplexer.Multiplexer
+	client   *http.Client
 }
 
-func newJoinHandler(store *conf.Store) *joinHandler {
+func newJoinHandler(store *conf.Store, balancer *entryBalancer, mux *multiplexer.Multiplexer) *joinHandler {
 	return &joinHandler{
-		store: store,
+		store:    store,
+		balancer: balancer,
+		mux:      mux,
 		client: &http.Client{
 			// BDS 协商最长等待约 15s, 留足余量
 			Timeout: 30 * time.Second,
@@ -37,7 +43,73 @@ func newJoinHandler(store *conf.Store) *joinHandler {
 
 // motd 处理 GET /v1/join, 透传服务器名片
 func (h *joinHandler) motd(c *gin.Context) {
-	h.forward(c)
+	backend := h.match(c.Request.Host)
+	if backend == nil {
+		logger.Warn("no bds route for host", "host", c.Request.Host)
+		writeText(c, http.StatusNotFound, "no route for host")
+		return
+	}
+	h.forward(c, backend, nil, nil)
+}
+
+// offer 处理 POST /v1/join/:networkID, 透传 SDP offer 并拦截重写 answer
+func (h *joinHandler) offer(c *gin.Context) {
+	backend := h.match(c.Request.Host)
+	if backend == nil {
+		logger.Warn("no bds route for host", "host", c.Request.Host)
+		writeText(c, http.StatusNotFound, "no route for host")
+		return
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(c.Writer, c.Request.Body, joinBodyLimit))
+	if err != nil {
+		writeText(c, http.StatusBadRequest, "failed to read request body")
+		return
+	}
+	logger.Debug("join offer request", "network_id", c.Param("networkID"), "host", c.Request.Host, "backend", net.JoinHostPort(backend.Host, strconv.Itoa(backend.Port)), "sdp", string(body))
+	h.forward(c, backend, body, h.rewriteAnswer)
+}
+
+// rewriteAnswer 拦截 200/application/sdp 的 answer: 分配公网线路, 重写
+// candidate 并注册数据面会话。数字错误码 (纯数字 body) 与其他内容原样透传。
+// 重写/建会话失败时同样透传原始 answer, 保留 BDS 原始行为便于排障。
+func (h *joinHandler) rewriteAnswer(status int, contentType string, body []byte) []byte {
+	if status != http.StatusOK || !strings.HasPrefix(contentType, "application/sdp") {
+		return body
+	}
+	// 拦截前确认 body 真是 SDP (answer 也可能是纯数字错误码)
+	if !bytes.HasPrefix(bytes.TrimSpace(body), []byte("v=")) {
+		return body
+	}
+
+	entry, err := h.balancer.pick()
+	if err != nil {
+		logger.Error("no available entry, passing through", "err", err)
+		return body
+	}
+	key := multiplexer.EntryKey(entry)
+	passThrough := func() []byte {
+		h.balancer.release(key)
+		return body
+	}
+
+	ip, err := resolveEntryIP(entry.Host)
+	if err != nil {
+		logger.Error("resolve entry host failed, passing through", "entry", key, "err", err)
+		return passThrough()
+	}
+	res, err := RewriteAnswer(body, ip, uint16(entry.Port))
+	if err != nil {
+		logger.Error("rewrite answer failed, passing through", "err", err)
+		return passThrough()
+	}
+	logger.Debug("answer rewritten", "ufrag", res.Ufrag, "backend", res.BackendAddr,
+		"original", string(body), "rewritten", string(res.Body))
+	if err := h.mux.CreateSession(res.Ufrag, res.Pwd, res.BackendAddr, key); err != nil {
+		logger.Error("create session failed, passing through", "ufrag", res.Ufrag, "backend", res.BackendAddr, "err", err)
+		return passThrough()
+	}
+	logger.Info("session signaled", "ufrag", res.Ufrag, "backend", res.BackendAddr, "entry", key)
+	return res.Body
 }
 
 // match 按请求 Host 匹配 BDS 配置, 仅匹配启用的条目, 列表中靠前的优先
@@ -52,22 +124,21 @@ func (h *joinHandler) match(hostport string) *conf.BDSConf {
 	return nil
 }
 
-// forward 把请求透传到匹配的 BDS 并流式回写响应
-func (h *joinHandler) forward(c *gin.Context) {
-	backend := h.match(c.Request.Host)
-	if backend == nil {
-		logger.Warn("no bds route for host", "host", c.Request.Host)
-		writeText(c, http.StatusNotFound, "no route for host")
-		return
-	}
-
+// forward 把请求透传到匹配的 BDS 并回写响应; body 为 nil 时使用原始请求体
+// (GET), 否则使用给定内容 (POST 已读取的 offer); rewriteResp 非空时对响应
+// body 做拦截处理
+func (h *joinHandler) forward(c *gin.Context, backend *conf.BDSConf, body []byte, rewriteResp func(status int, contentType string, respBody []byte) []byte) {
 	target := url.URL{
 		Scheme:   "http",
 		Host:     net.JoinHostPort(backend.Host, strconv.Itoa(backend.Port)),
 		Path:     c.Request.URL.Path,
 		RawQuery: c.Request.URL.RawQuery,
 	}
-	req, err := http.NewRequestWithContext(c.Request.Context(), c.Request.Method, target.String(), c.Request.Body)
+	var reqBody io.Reader
+	if body != nil {
+		reqBody = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(c.Request.Context(), c.Request.Method, target.String(), reqBody)
 	if err != nil {
 		writeText(c, http.StatusInternalServerError, "failed to build backend request")
 		return
@@ -83,9 +154,22 @@ func (h *joinHandler) forward(c *gin.Context) {
 	}
 	defer resp.Body.Close()
 
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, joinBodyLimit+1))
+	if err != nil {
+		writeText(c, http.StatusBadGateway, "failed to read backend response")
+		return
+	}
+	logger.Debug("bds response", "method", c.Request.Method, "backend", target.Host,
+		"status", resp.StatusCode, "content_type", resp.Header.Get("Content-Type"), "body", string(respBody))
+	if rewriteResp != nil {
+		respBody = rewriteResp(resp.StatusCode, resp.Header.Get("Content-Type"), respBody)
+	}
+
 	copyHeaders(c.Writer.Header(), resp.Header)
+	// body 可能已被改写, 原 Content-Length 不再有效, 删除后由 Go 按实际长度重写
+	c.Writer.Header().Del("Content-Length")
 	c.Status(resp.StatusCode)
-	_, _ = io.Copy(c.Writer, resp.Body)
+	_, _ = c.Writer.Write(respBody)
 }
 
 // copyHeaders 复制头部并剔除逐跳头

@@ -22,7 +22,7 @@ type TLSConf struct {
 //	  - job_name: netherproxy
 //	    scheme: https                   # 网关启用 TLS 时
 //	    metrics_path: /api/metrics      # 非默认路径时必须指定
-//	    authorization:                  # auth 开启时配置, 否则省略
+//	    authorization:                  # 默认需要认证, 或将 /api/metrics 加入 gateway.api_auth_exempt
 //	      type: Bearer
 //	      credentials: <gateway.token>  # 也可改用 credentials_file 引用单独文件
 //	    tls_config:
@@ -31,7 +31,6 @@ type TLSConf struct {
 //	      - targets: ["<gateway.host:gateway.port>"]
 type MetricsConf struct {
 	Enable bool `yaml:"enable" json:"enable"` // 是否启用 Prometheus 指标 (固定路径 /api/metrics)
-	Auth   bool `yaml:"auth" json:"auth"`     // 是否对指标路由启用 token 认证 (通过 Authorization: Bearer <token> 传递)
 }
 
 // 访问控制配置: XUID 黑白名单 + webhook 动态判定
@@ -61,7 +60,7 @@ type GatewayConf struct {
 	Port           int           `yaml:"port" json:"port"`                       // 网关端口
 	Token          string        `yaml:"token" json:"token"`                     // 访问令牌, 默认随机生成
 	VerifyIdentity bool          `yaml:"verify_identity" json:"verify_identity"` // 是否验证玩家身份 JWT
-	APIAuth        bool          `yaml:"api_auth" json:"api_auth"`               // 管理 API (config/entry/session) 是否需要 Bearer 认证 (⚠️ 关闭后任何人均可读写配置)
+	APIAuthExempt  []string      `yaml:"api_auth_exempt" json:"api_auth_exempt"` // 免认证的 API 路由 (如 ["/api/healthz"]), 不在列表中的一律需要 Bearer 认证
 	RelayOnly      bool          `yaml:"relay_only" json:"relay_only"`           // 中继模式: 隐藏客户端真实地址 (offer candidate 替换为不可达占位), 强制全部流量经代理
 	TLS            TLSConf       `yaml:"tls" json:"tls"`                         // TLS配置
 	Metrics        MetricsConf   `yaml:"metrics" json:"metrics"`                 // 指标配置
@@ -228,8 +227,10 @@ func (c *Conf) Validate() error {
 		}
 	}
 
-	if c.Gateway.Metrics.Enable && c.Gateway.Metrics.Auth && c.Gateway.Token == "" {
-		errs = append(errs, errors.New("gateway.token: required when metrics auth is enabled"))
+	// token 是全部需认证 API 的凭据, 不允许为空
+	// (空 token 会使 "Bearer " 空校验通过造成认证绕过)
+	if c.Gateway.Token == "" {
+		errs = append(errs, errors.New("gateway.token: must not be empty"))
 	}
 
 	switch c.Gateway.Access.Mode {

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"slices"
 	"strconv"
 	"time"
 
@@ -62,27 +63,25 @@ func New(store *conf.Store, mux *multiplexer.Multiplexer, tracker *multiplexer.E
 	router.GET("/v1/join", join.motd)
 	router.POST("/v1/join/:networkID", join.offer)
 
-	api := router.Group("/api")
+	// 管理 API: 默认全部需要 Bearer 认证, api_auth_exempt 列表内的路由放行
+	api := router.Group("/api", apiAuth(store))
 
 	if cfg.Metrics.Enable {
 		router.Use(collectMetrics())
-		api.GET("/metrics", bearerAuth(store, func(g *conf.GatewayConf) bool { return g.Metrics.Auth }), gin.WrapH(promhttp.Handler()))
+		api.GET("/metrics", gin.WrapH(promhttp.Handler()))
 	}
 
 	api.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 
-	// 管理 API 认证开关跟随 gateway.api_auth, 热更即时生效
-	manageAuth := bearerAuth(store, func(g *conf.GatewayConf) bool { return g.APIAuth })
-
 	// 线路状态与心跳统计
-	api.GET("/entry", manageAuth, handleEntryStatus(store, tracker, balancer))
+	api.GET("/entry", handleEntryStatus(store, tracker, balancer))
 
 	// 会话列表 (含玩家信息与流量统计)
-	api.GET("/session", manageAuth, handleSessionList(mux.Table()))
+	api.GET("/session", handleSessionList(mux.Table()))
 	// 掐断指定会话
-	api.DELETE("/session/:ufrag", manageAuth, handleCloseSession(mux.Table()))
+	api.DELETE("/session/:ufrag", handleCloseSession(mux.Table()))
 
 	registerConfigAPI(api, store)
 
@@ -134,13 +133,14 @@ func accessLog() gin.HandlerFunc {
 	}
 }
 
-// bearerAuth 校验 Authorization: Bearer <gateway.token> 请求头, 使用常量时间比较
-// 防止时序攻击。token 与 enabled 开关每次请求从配置中心读取, 热更即时生效;
-// enabled 返回 false 时直接放行。
-func bearerAuth(store *conf.Store, enabled func(*conf.GatewayConf) bool) gin.HandlerFunc {
+// apiAuth 管理 API 认证中间件: api_auth_exempt 列表内的路由 (按路由模板匹配)
+// 直接放行, 其余校验 Authorization: Bearer <gateway.token>。
+// 豁免列表与 token 每次请求从配置中心读取, 热更即时生效;
+// 使用常量时间比较防止时序攻击。
+func apiAuth(store *conf.Store) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		cfg := store.Get().Gateway
-		if !enabled(&cfg) {
+		if slices.Contains(cfg.APIAuthExempt, c.FullPath()) {
 			c.Next()
 			return
 		}

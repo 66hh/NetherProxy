@@ -33,7 +33,7 @@ func Default() *Conf {
 			Port:           19130,
 			Token:          randomHex(16),
 			VerifyIdentity: true,
-			APIAuth:        true,
+			APIAuthExempt:  []string{"/api/healthz"},
 			Access: AccessConf{
 				Mode:  "off",
 				XUIDs: []string{},

@@ -5,3 +5,6 @@
 # 调试输出
 *.log
 *.pcap
+
+# 运行期生成的配置
+/config.yml

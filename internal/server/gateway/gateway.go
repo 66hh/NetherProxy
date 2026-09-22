@@ -66,24 +66,23 @@ func New(store *conf.Store, mux *multiplexer.Multiplexer, tracker *multiplexer.E
 
 	if cfg.Metrics.Enable {
 		router.Use(collectMetrics())
-		if cfg.Metrics.Auth {
-			api.GET("/metrics", tokenAuth(store), gin.WrapH(promhttp.Handler()))
-		} else {
-			api.GET("/metrics", gin.WrapH(promhttp.Handler()))
-		}
+		api.GET("/metrics", bearerAuth(store, func(g *conf.GatewayConf) bool { return g.Metrics.Auth }), gin.WrapH(promhttp.Handler()))
 	}
 
 	api.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 
+	// 管理 API 认证开关跟随 gateway.api_auth, 热更即时生效
+	manageAuth := bearerAuth(store, func(g *conf.GatewayConf) bool { return g.APIAuth })
+
 	// 线路状态与心跳统计
-	api.GET("/entry", tokenAuth(store), handleEntryStatus(store, tracker, balancer))
+	api.GET("/entry", manageAuth, handleEntryStatus(store, tracker, balancer))
 
 	// 会话列表 (含玩家信息与流量统计)
-	api.GET("/session", tokenAuth(store), handleSessionList(mux.Table()))
+	api.GET("/session", manageAuth, handleSessionList(mux.Table()))
 	// 掐断指定会话
-	api.DELETE("/session/:ufrag", tokenAuth(store), handleCloseSession(mux.Table()))
+	api.DELETE("/session/:ufrag", manageAuth, handleCloseSession(mux.Table()))
 
 	registerConfigAPI(api, store)
 
@@ -135,11 +134,17 @@ func accessLog() gin.HandlerFunc {
 	}
 }
 
-// tokenAuth 校验 Authorization: Bearer <gateway.token> 请求头, 使用常量时间比较防止时序攻击
-// token 每次请求从配置中心读取, 重载后即时生效
-func tokenAuth(store *conf.Store) gin.HandlerFunc {
+// bearerAuth 校验 Authorization: Bearer <gateway.token> 请求头, 使用常量时间比较
+// 防止时序攻击。token 与 enabled 开关每次请求从配置中心读取, 热更即时生效;
+// enabled 返回 false 时直接放行。
+func bearerAuth(store *conf.Store, enabled func(*conf.GatewayConf) bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		expected := []byte("Bearer " + store.Get().Gateway.Token)
+		cfg := store.Get().Gateway
+		if !enabled(&cfg) {
+			c.Next()
+			return
+		}
+		expected := []byte("Bearer " + cfg.Token)
 		if subtle.ConstantTimeCompare([]byte(c.GetHeader("Authorization")), expected) != 1 {
 			c.AbortWithStatus(http.StatusUnauthorized)
 			return

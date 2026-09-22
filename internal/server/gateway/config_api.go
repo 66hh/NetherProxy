@@ -12,13 +12,14 @@ import (
 	"NetherProxy/internal/session"
 )
 
-// registerConfigAPI 注册配置管理路由, 全部强制 Bearer 认证
+// registerConfigAPI 注册配置管理路由, 认证跟随 gateway.api_auth
 //
 //	GET  /api/config         读取当前生效配置
 //	PUT  /api/config         校验并保存配置 (JSON), 保存成功后立即生效
 //	POST /api/config/reload  从配置文件重新加载
 func registerConfigAPI(api *gin.RouterGroup, store *conf.Store) {
-	g := api.Group("/config", tokenAuth(store))
+	manageAuth := bearerAuth(store, func(g *conf.GatewayConf) bool { return g.APIAuth })
+	g := api.Group("/config", manageAuth)
 	g.GET("", handleReadConfig(store))
 	g.PUT("", handleWriteConfig(store))
 	g.POST("/reload", handleReloadConfig(store))

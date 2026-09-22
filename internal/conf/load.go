@@ -29,9 +29,11 @@ func Default() *Conf {
 			MaxAge:     30,
 		},
 		Gateway: GatewayConf{
-			Host:  "0.0.0.0",
-			Port:  19130,
-			Token: randomHex(16),
+			Host:           "0.0.0.0",
+			Port:           19130,
+			Token:          randomHex(16),
+			VerifyIdentity: true,
+			APIAuth:        true,
 			Access: AccessConf{
 				Mode:  "off",
 				XUIDs: []string{},

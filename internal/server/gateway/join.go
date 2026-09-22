@@ -83,12 +83,18 @@ func (h *joinHandler) offer(c *gin.Context) {
 	}
 
 	// 验证玩家身份 (offer 中微软签发的 identity JWT), 不转发到 BDS;
-	// 拒绝时返回与 BDS 一致的数字错误码 37 (IdentityNotAllowed)
-	player, err := h.verifier.verify(body)
-	if err != nil {
-		logger.Warn("identity rejected", "client", c.ClientIP(), "err", err)
-		c.Data(http.StatusOK, "application/sdp", []byte("37"))
-		return
+	// 拒绝时返回与 BDS 一致的数字错误码 37 (IdentityNotAllowed)。
+	// verify_identity 关闭时仅解析玩家信息用于展示, 不做验签。
+	var player PlayerInfo
+	if h.store.Get().Gateway.VerifyIdentity {
+		player, err = h.verifier.verify(body)
+		if err != nil {
+			logger.Warn("identity rejected", "client", c.ClientIP(), "err", err)
+			c.Data(http.StatusOK, "application/sdp", []byte("37"))
+			return
+		}
+	} else {
+		player = h.verifier.extractPlayer(body)
 	}
 
 	// join 频率限制 (按 XUID)

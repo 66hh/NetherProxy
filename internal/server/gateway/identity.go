@@ -112,6 +112,27 @@ func (v *identityVerifier) verify(offer []byte) (PlayerInfo, error) {
 	return PlayerInfo{Name: claims.XName, XUID: claims.XID}, nil
 }
 
+// extractPlayer 仅解析 identity 中的玩家信息, 不验签不校验时效
+// 用于 verify_identity 关闭时绑定会话展示, 信息不可信仅作参考
+func (v *identityVerifier) extractPlayer(offer []byte) PlayerInfo {
+	token, err := extractIdentityToken(offer)
+	if err != nil {
+		return PlayerInfo{}
+	}
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return PlayerInfo{}
+	}
+	var claims struct {
+		XName string `json:"xname"`
+		XID   string `json:"xid"`
+	}
+	if err := decodeSegment(parts[1], &claims); err != nil {
+		return PlayerInfo{}
+	}
+	return PlayerInfo{Name: claims.XName, XUID: claims.XID}
+}
+
 // extractIdentityToken 从 offer SDP 中提取 identity 断言里的玩家身份 token
 func extractIdentityToken(offer []byte) (string, error) {
 	for _, line := range strings.Split(strings.ReplaceAll(string(offer), "\r\n", "\n"), "\n") {

@@ -57,14 +57,16 @@ type RateLimitConf struct {
 
 // 网关服务器配置
 type GatewayConf struct {
-	Host      string        `yaml:"host" json:"host"`             // 网关主机
-	Port      int           `yaml:"port" json:"port"`             // 网关端口
-	Token     string        `yaml:"token" json:"token"`           // 访问令牌, 默认随机生成
-	RelayOnly bool          `yaml:"relay_only" json:"relay_only"` // 中继模式: 隐藏客户端真实地址 (offer candidate 替换为不可达占位), 强制全部流量经代理
-	TLS       TLSConf       `yaml:"tls" json:"tls"`               // TLS配置
-	Metrics   MetricsConf   `yaml:"metrics" json:"metrics"`       // 指标配置
-	Access    AccessConf    `yaml:"access" json:"access"`         // 访问控制 (黑白名单/webhook)
-	RateLimit RateLimitConf `yaml:"rate_limit" json:"rate_limit"` // join 频率限制
+	Host           string        `yaml:"host" json:"host"`                       // 网关主机
+	Port           int           `yaml:"port" json:"port"`                       // 网关端口
+	Token          string        `yaml:"token" json:"token"`                     // 访问令牌, 默认随机生成
+	VerifyIdentity bool          `yaml:"verify_identity" json:"verify_identity"` // 是否验证玩家身份 JWT
+	APIAuth        bool          `yaml:"api_auth" json:"api_auth"`               // 管理 API (config/entry/session) 是否需要 Bearer 认证 (⚠️ 关闭后任何人均可读写配置)
+	RelayOnly      bool          `yaml:"relay_only" json:"relay_only"`           // 中继模式: 隐藏客户端真实地址 (offer candidate 替换为不可达占位), 强制全部流量经代理
+	TLS            TLSConf       `yaml:"tls" json:"tls"`                         // TLS配置
+	Metrics        MetricsConf   `yaml:"metrics" json:"metrics"`                 // 指标配置
+	Access         AccessConf    `yaml:"access" json:"access"`                   // 访问控制 (黑白名单/webhook)
+	RateLimit      RateLimitConf `yaml:"rate_limit" json:"rate_limit"`           // join 频率限制
 }
 
 // 端口复用器配置

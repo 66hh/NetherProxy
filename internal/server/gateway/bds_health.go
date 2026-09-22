@@ -43,22 +43,22 @@ func init() {
 	prometheus.MustRegister(bdsHealthy, bdsProbeTotal, bdsProbeRTT)
 }
 
-// bdsStatusEvent 一次健康状态变化
-type bdsStatusEvent struct {
-	Time    time.Time `json:"time"`
-	Healthy bool      `json:"healthy"`
+// bdsProbeEvent 一次探测结果 (时间 + 成败), 用于面板状态历史图
+type bdsProbeEvent struct {
+	Time time.Time `json:"time"`
+	OK   bool      `json:"ok"`
 }
 
 // bdsStats BDS 健康统计
 type bdsStats struct {
-	Healthy          bool             `json:"healthy"`
-	TotalProbes      uint64           `json:"total_probes"`
-	FailedProbes     uint64           `json:"failed_probes"`
-	ConsecutiveFails int              `json:"consecutive_fails"`
-	LastRTTMs        float64          `json:"last_rtt_ms"`
-	LastError        string           `json:"last_error,omitempty"`
-	LastChange       time.Time        `json:"last_change"`
-	History          []bdsStatusEvent `json:"history,omitempty"` // 状态变化时间线, 用于状态图
+	Healthy          bool            `json:"healthy"`
+	TotalProbes      uint64          `json:"total_probes"`
+	FailedProbes     uint64          `json:"failed_probes"`
+	ConsecutiveFails int             `json:"consecutive_fails"`
+	LastRTTMs        float64         `json:"last_rtt_ms"`
+	LastError        string          `json:"last_error,omitempty"`
+	LastChange       time.Time       `json:"last_change"`
+	History          []bdsProbeEvent `json:"history,omitempty"` // 探测结果时间线, 用于状态图
 
 	unresponsive bool // 已记录过"无响应"日志, 避免刷屏
 }
@@ -99,7 +99,7 @@ func (t *bdsTracker) snapshot() map[string]bdsStats {
 }
 
 // record 记录一次探测结果, 语义与 EntryTracker.Record 一致
-func (t *bdsTracker) record(key string, rtt time.Duration, probeErr error, autoOffline bool, retries int) {
+func (t *bdsTracker) record(key string, rtt time.Duration, probeErr error, manualOnly bool, retries int) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	s := t.stats[key]
@@ -108,6 +108,7 @@ func (t *bdsTracker) record(key string, rtt time.Duration, probeErr error, autoO
 		t.stats[key] = s
 	}
 	s.TotalProbes++
+	s.appendHistory(probeErr == nil, t.historySize())
 
 	if probeErr != nil {
 		s.FailedProbes++
@@ -116,14 +117,13 @@ func (t *bdsTracker) record(key string, rtt time.Duration, probeErr error, autoO
 		bdsProbeTotal.WithLabelValues(key, "failure").Inc()
 		if s.ConsecutiveFails >= retries && !s.unresponsive {
 			s.unresponsive = true
-			if autoOffline && s.Healthy {
+			if !manualOnly && s.Healthy {
 				s.Healthy = false
 				s.LastChange = time.Now()
-				s.appendHistory(false, t.historySize())
 				bdsHealthy.WithLabelValues(key).Set(0)
 			}
 			logger.Error("bds unresponsive", "bds", key,
-				"consecutive_fails", s.ConsecutiveFails, "auto_offline", autoOffline, "err", probeErr)
+				"consecutive_fails", s.ConsecutiveFails, "manual_only", manualOnly, "err", probeErr)
 		}
 		return
 	}
@@ -140,18 +140,17 @@ func (t *bdsTracker) record(key string, rtt time.Duration, probeErr error, autoO
 	if !s.Healthy {
 		s.Healthy = true
 		s.LastChange = time.Now()
-		s.appendHistory(true, t.historySize())
 		bdsHealthy.WithLabelValues(key).Set(1)
 		logger.Info("bds back online", "bds", key)
 	}
 }
 
-// appendHistory 追加状态变化事件, 超出上限丢弃最旧。调用者须持有锁。
-func (s *bdsStats) appendHistory(healthy bool, maxSize int) {
+// appendHistory 追加一次探测结果, 超出上限丢弃最旧。调用者须持有锁。
+func (s *bdsStats) appendHistory(ok bool, maxSize int) {
 	if maxSize <= 0 {
 		maxSize = 500
 	}
-	s.History = append(s.History, bdsStatusEvent{Time: time.Now(), Healthy: healthy})
+	s.History = append(s.History, bdsProbeEvent{Time: time.Now(), OK: ok})
 	if len(s.History) > maxSize {
 		s.History = s.History[len(s.History)-maxSize:]
 	}
@@ -313,21 +312,21 @@ func (w *bdsWorker) probeOnce(ctx context.Context, hb conf.HeartbeatConf) {
 	url := fmt.Sprintf("http://%s/v1/join", w.key)
 	req, err := http.NewRequestWithContext(pctx, http.MethodGet, url, nil)
 	if err != nil {
-		w.tracker.record(w.key, 0, err, hb.AutoOffline, hb.Retries)
+		w.tracker.record(w.key, 0, err, !hb.ManualOnly, hb.Retries)
 		return
 	}
 	start := time.Now()
 	resp, err := w.client.Do(req)
 	if err != nil {
-		w.tracker.record(w.key, 0, err, hb.AutoOffline, hb.Retries)
+		w.tracker.record(w.key, 0, err, !hb.ManualOnly, hb.Retries)
 		return
 	}
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		w.tracker.record(w.key, 0, fmt.Errorf("status %d", resp.StatusCode), hb.AutoOffline, hb.Retries)
+		w.tracker.record(w.key, 0, fmt.Errorf("status %d", resp.StatusCode), !hb.ManualOnly, hb.Retries)
 		return
 	}
-	w.tracker.record(w.key, time.Since(start), nil, hb.AutoOffline, hb.Retries)
+	w.tracker.record(w.key, time.Since(start), nil, !hb.ManualOnly, hb.Retries)
 }
 
 // handleBDSStatus 返回各 BDS 的配置、路由状态与健康统计

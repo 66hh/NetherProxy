@@ -76,7 +76,7 @@ bds:
     port: 19132
     heartbeat:           # BDS 健康探测 (HTTP GET /v1/join)
       enable: false
-      auto_offline: true # 连续失败自动下线 (false 仅记录统计)
+      manual_only: false # true 时仅记录统计, 无响应由人工处理; false 自动下线
       interval: 5s
       timeout: 2s
       retries: 3
@@ -92,7 +92,7 @@ entry:
     max_session: 100     # 最大会话数, 0 不限; 多条线路按最少会话数均衡
     heartbeat:           # 线路心跳 (UDP NPING/NPONG, 不转发到 BDS)
       enable: false
-      auto_offline: true
+      manual_only: false # true 时仅记录统计, 无响应由人工处理; false 自动下线
       interval: 5s
       timeout: 2s
       retries: 3

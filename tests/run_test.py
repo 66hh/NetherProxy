@@ -51,7 +51,7 @@ def main():
         cfg["bds"] = [{
             "enable": True, "domain": "*",
             "host": "127.0.0.1", "port": 19501,
-            "heartbeat": {"enable": False, "auto_offline": True, "interval": "5s", "timeout": "2s", "retries": 3},
+            "heartbeat": {"enable": False, "manual_only": False, "interval": "5s", "timeout": "2s", "retries": 3},
         }]
         api("PUT", "/api/config", token, cfg)
         print("config switched to fake bds (verify_identity=false)", flush=True)

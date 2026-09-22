@@ -68,11 +68,9 @@ func Default() *Conf {
 				Host:   "127.0.0.1",
 				Port:   19132,
 				Heartbeat: HeartbeatConf{
-					Enable:      false,
-					AutoOffline: true,
-					Interval:    "5s",
-					Timeout:     "2s",
-					Retries:     3,
+					Interval: "5s",
+					Timeout:  "2s",
+					Retries:  3,
 				},
 			},
 		},
@@ -83,11 +81,9 @@ func Default() *Conf {
 				Port:       19131,
 				MaxSession: 100,
 				Heartbeat: HeartbeatConf{
-					Enable:      false,
-					AutoOffline: true,
-					Interval:    "5s",
-					Timeout:     "2s",
-					Retries:     3,
+					Interval: "5s",
+					Timeout:  "2s",
+					Retries:  3,
 				},
 			},
 		},
@@ -104,10 +100,35 @@ func Load(path string) (*Conf, error) {
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("parse config file: %w", err)
 	}
+	normalize(cfg)
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("validate config: %w", err)
 	}
 	return cfg, nil
+}
+
+// normalize 为数组条目填充缺省字段: yaml 数组整体替换默认数组,
+// 条目内未写的子字段需要单独补默认值
+func normalize(c *Conf) {
+	for i := range c.BDS {
+		fillHeartbeatDefaults(&c.BDS[i].Heartbeat)
+	}
+	for i := range c.Entry {
+		fillHeartbeatDefaults(&c.Entry[i].Heartbeat)
+	}
+}
+
+// fillHeartbeatDefaults 填充心跳配置的缺省值
+func fillHeartbeatDefaults(hb *HeartbeatConf) {
+	if hb.Interval == "" {
+		hb.Interval = "5s"
+	}
+	if hb.Timeout == "" {
+		hb.Timeout = "2s"
+	}
+	if hb.Retries == 0 {
+		hb.Retries = 3
+	}
 }
 
 // Save 将配置以 YAML 格式写入文件: 先写临时文件再原子替换,

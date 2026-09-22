@@ -161,8 +161,8 @@ function initApp() {
   document.getElementById("tab-sessions").classList.remove("hidden");
   document.getElementById("conn-state").innerHTML = '<span class="dot up"></span>已连接';
   refreshAll();
-  setInterval(refreshSessions, 5000);
-  setInterval(refreshStatus, 10000);
+  setInterval(refreshSessions, 2000);
+  setInterval(refreshStatus, 3000);
 }
 document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
   document.querySelectorAll("nav button").forEach(x => x.classList.remove("active"));
@@ -218,18 +218,15 @@ function blockSession(xuid, name) {
 }
 
 // ---------- 状态历史条 ----------
+// 最近 N 次探测, 每次一格: 绿=成功 红=失败 灰=无数据
 function renderHistory(stats) {
-  const B = 48, spanMs = 24 * 3600e3, now = Date.now();
+  const B = 48;
   const events = (stats && stats.history) || [];
+  const recent = events.slice(-B);
   let html = '<div class="hist">';
-  for (let i = 0; i < B; i++) {
-    const t = now - (B - 1 - i) * spanMs / B;
-    let st = null;
-    for (const e of events) if (new Date(e.time).getTime() <= t) st = e.healthy;
-    if (st === null) st = stats ? stats.healthy : null; // 无历史时按当前状态
-    html += `<i class="${st === null ? "" : st ? "up" : "down"}"></i>`;
-  }
-  html += '</div><div class="hist-label"><span>24小时前</span><span>现在</span></div>';
+  for (let i = 0; i < B - recent.length; i++) html += '<i></i>';
+  for (const e of recent) html += `<i class="${e.ok ? "up" : "down"}"></i>`;
+  html += '</div><div class="hist-label"><span>早</span><span>最近 ' + recent.length + ' 次探测</span><span>现在</span></div>';
   return html;
 }
 
@@ -248,14 +245,14 @@ function renderEntries() {
     </div>`).join("");
 }
 function openEntryModal(i) {
-  const e = i >= 0 ? configEntry(i) : { enable: true, host: "", port: 19131, max_session: 100, heartbeat: { enable: false, auto_offline: true, interval: "5s", timeout: "2s", retries: 3 } };
+  const e = i >= 0 ? configEntry(i) : { enable: true, host: "", port: 19131, max_session: 100, heartbeat: { enable: false, manual_only: false, interval: "5s", timeout: "2s", retries: 3 } };
   openModal(`<h2>${i >= 0 ? "编辑" : "新增"}线路</h2>
     <label class="fld"><span>主机 (公网地址)</span><input type="text" id="m-host" value="${esc(e.host)}"></label>
     <label class="fld"><span>端口</span><input type="number" id="m-port" value="${e.port}"></label>
     <label class="fld"><span>最大会话数 (0 不限)</span><input type="number" id="m-maxsession" value="${e.max_session}"></label>
     ${fldSwitch("启用", "m-enable", e.enable)}
     ${fldSwitch("心跳探测", "m-hb-enable", e.heartbeat.enable)}
-    ${fldSwitch("失败自动下线", "m-hb-offline", e.heartbeat.auto_offline)}
+    ${fldSwitch("仅记录统计 (手动下线)", "m-hb-manual", e.heartbeat.manual_only)}
     <label class="fld"><span>心跳间隔</span><input type="text" id="m-hb-interval" value="${esc(e.heartbeat.interval)}"></label>
     <label class="fld"><span>超时</span><input type="text" id="m-hb-timeout" value="${esc(e.heartbeat.timeout)}"></label>
     <label class="fld"><span>失败次数阈值</span><input type="number" id="m-hb-retries" value="${e.heartbeat.retries}"></label>
@@ -267,7 +264,7 @@ function saveEntry(i) {
   const cfg = JSON.parse(JSON.stringify(CFG));
   const e = {
     enable: gbool("m-enable"), host: gval("m-host"), port: +gval("m-port"), max_session: +gval("m-maxsession"),
-    heartbeat: { enable: gbool("m-hb-enable"), auto_offline: gbool("m-hb-offline"),
+    heartbeat: { enable: gbool("m-hb-enable"), manual_only: gbool("m-hb-manual"),
       interval: gval("m-hb-interval"), timeout: gval("m-hb-timeout"), retries: +gval("m-hb-retries") },
   };
   if (i >= 0) cfg.entry[i] = e; else cfg.entry.push(e);
@@ -295,14 +292,14 @@ function renderBds() {
     </div>`).join("");
 }
 function openBdsModal(i) {
-  const b = i >= 0 ? CFG.bds[i] : { enable: true, domain: "", host: "", port: 19132, heartbeat: { enable: false, auto_offline: true, interval: "5s", timeout: "2s", retries: 3 } };
+  const b = i >= 0 ? CFG.bds[i] : { enable: true, domain: "", host: "", port: 19132, heartbeat: { enable: false, manual_only: false, interval: "5s", timeout: "2s", retries: 3 } };
   openModal(`<h2>${i >= 0 ? "编辑" : "新增"} BDS</h2>
     <label class="fld"><span>绑定域名 (支持 * 通配)</span><input type="text" id="m-domain" value="${esc(b.domain)}"></label>
     <label class="fld"><span>主机</span><input type="text" id="m-host" value="${esc(b.host)}"></label>
     <label class="fld"><span>端口</span><input type="number" id="m-port" value="${b.port}"></label>
     ${fldSwitch("启用", "m-enable", b.enable)}
     ${fldSwitch("健康探测", "m-hb-enable", b.heartbeat.enable)}
-    ${fldSwitch("失败自动下线", "m-hb-offline", b.heartbeat.auto_offline)}
+    ${fldSwitch("仅记录统计 (手动下线)", "m-hb-manual", b.heartbeat.manual_only)}
     <label class="fld"><span>探测间隔</span><input type="text" id="m-hb-interval" value="${esc(b.heartbeat.interval)}"></label>
     <label class="fld"><span>超时</span><input type="text" id="m-hb-timeout" value="${esc(b.heartbeat.timeout)}"></label>
     <label class="fld"><span>失败次数阈值</span><input type="number" id="m-hb-retries" value="${b.heartbeat.retries}"></label>
@@ -313,7 +310,7 @@ function saveBds(i) {
   const cfg = JSON.parse(JSON.stringify(CFG));
   const b = {
     enable: gbool("m-enable"), domain: gval("m-domain"), host: gval("m-host"), port: +gval("m-port"),
-    heartbeat: { enable: gbool("m-hb-enable"), auto_offline: gbool("m-hb-offline"),
+    heartbeat: { enable: gbool("m-hb-enable"), manual_only: gbool("m-hb-manual"),
       interval: gval("m-hb-interval"), timeout: gval("m-hb-timeout"), retries: +gval("m-hb-retries") },
   };
   if (i >= 0) cfg.bds[i] = b; else cfg.bds.push(b);

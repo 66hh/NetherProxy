@@ -146,11 +146,11 @@ func (b BDSConf) MatchDomain(host string) bool {
 
 // 线路心跳配置, 代理主动探测线路可达性并记录统计
 type HeartbeatConf struct {
-	Enable      bool   `yaml:"enable" json:"enable"`             // 是否启用心跳探测
-	AutoOffline bool   `yaml:"auto_offline" json:"auto_offline"` // 连续失败是否自动下线线路 (false 时仅记录统计与日志)
-	Interval    string `yaml:"interval" json:"interval"`         // 心跳间隔, 如 "5s"
-	Timeout     string `yaml:"timeout" json:"timeout"`           // 单次响应超时, 如 "2s"
-	Retries     int    `yaml:"retries" json:"retries"`           // 连续失败多少次后判定无响应
+	Enable     bool   `yaml:"enable" json:"enable"`           // 是否启用心跳探测
+	ManualOnly bool   `yaml:"manual_only" json:"manual_only"` // 仅记录统计与日志, 无响应时由人工处理 (false = 自动下线)
+	Interval   string `yaml:"interval" json:"interval"`       // 心跳间隔, 如 "5s"
+	Timeout    string `yaml:"timeout" json:"timeout"`         // 单次响应超时, 如 "2s"
+	Retries    int    `yaml:"retries" json:"retries"`         // 连续失败多少次后判定无响应
 }
 
 // IntervalDuration 解析心跳间隔

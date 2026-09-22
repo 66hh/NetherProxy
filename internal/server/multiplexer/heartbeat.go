@@ -79,22 +79,22 @@ func (m *Multiplexer) replyPong(ping []byte, src netip.AddrPort) {
 	}
 }
 
-// StatusEvent 一次健康状态变化
-type StatusEvent struct {
-	Time    time.Time `json:"time"`
-	Healthy bool      `json:"healthy"`
+// ProbeEvent 一次探测结果 (时间 + 成败), 用于面板状态历史图
+type ProbeEvent struct {
+	Time time.Time `json:"time"`
+	OK   bool      `json:"ok"`
 }
 
 // EntryStats 线路心跳统计
 type EntryStats struct {
-	Healthy          bool          `json:"healthy"`
-	TotalProbes      uint64        `json:"total_probes"`
-	FailedProbes     uint64        `json:"failed_probes"`
-	ConsecutiveFails int           `json:"consecutive_fails"`
-	LastRTTMs        float64       `json:"last_rtt_ms"`
-	LastError        string        `json:"last_error,omitempty"`
-	LastChange       time.Time     `json:"last_change"`
-	History          []StatusEvent `json:"history,omitempty"` // 状态变化时间线, 用于状态图
+	Healthy          bool         `json:"healthy"`
+	TotalProbes      uint64       `json:"total_probes"`
+	FailedProbes     uint64       `json:"failed_probes"`
+	ConsecutiveFails int          `json:"consecutive_fails"`
+	LastRTTMs        float64      `json:"last_rtt_ms"`
+	LastError        string       `json:"last_error,omitempty"`
+	LastChange       time.Time    `json:"last_change"`
+	History          []ProbeEvent `json:"history,omitempty"` // 探测结果时间线, 用于状态图
 
 	unresponsive bool // 已记录过"无响应"日志, 避免刷屏
 }
@@ -215,13 +215,13 @@ func (t *EntryTracker) Healthy(key string) bool {
 	return s == nil || s.Healthy
 }
 
-// appendHistory 追加状态变化事件, 超出上限 (stats.status_history_size) 丢弃最旧。
+// appendHistory 追加一次探测结果, 超出上限 (stats.status_history_size) 丢弃最旧。
 // 调用者须持有锁。
-func (s *EntryStats) appendHistory(healthy bool, maxSize int) {
+func (s *EntryStats) appendHistory(ok bool, maxSize int) {
 	if maxSize <= 0 {
 		maxSize = 500
 	}
-	s.History = append(s.History, StatusEvent{Time: time.Now(), Healthy: healthy})
+	s.History = append(s.History, ProbeEvent{Time: time.Now(), OK: ok})
 	if len(s.History) > maxSize {
 		s.History = s.History[len(s.History)-maxSize:]
 	}
@@ -229,7 +229,7 @@ func (s *EntryStats) appendHistory(healthy bool, maxSize int) {
 
 // Record 记录一次探测结果。autoOffline 为 true 且连续失败达到 retries 时
 // 将线路标记为下线; 否则仅记录统计与日志, 不影响路由。
-func (t *EntryTracker) Record(key string, rtt time.Duration, probeErr error, autoOffline bool, retries int) {
+func (t *EntryTracker) Record(key string, rtt time.Duration, probeErr error, manualOnly bool, retries int) {
 	t.mu.Lock()
 	s := t.stats[key]
 	if s == nil {
@@ -237,6 +237,7 @@ func (t *EntryTracker) Record(key string, rtt time.Duration, probeErr error, aut
 		t.stats[key] = s
 	}
 	s.TotalProbes++
+	s.appendHistory(probeErr == nil, t.statsHistorySize())
 	t.markDirty()
 
 	if probeErr != nil {
@@ -246,14 +247,13 @@ func (t *EntryTracker) Record(key string, rtt time.Duration, probeErr error, aut
 		entryHeartbeatTotal.WithLabelValues(key, "failure").Inc()
 		if s.ConsecutiveFails >= retries && !s.unresponsive {
 			s.unresponsive = true
-			if autoOffline && s.Healthy {
+			if !manualOnly && s.Healthy {
 				s.Healthy = false
 				s.LastChange = time.Now()
-				s.appendHistory(false, t.statsHistorySize())
 				entryHealthy.WithLabelValues(key).Set(0)
 			}
 			logger.Error("entry unresponsive", "entry", key,
-				"consecutive_fails", s.ConsecutiveFails, "auto_offline", autoOffline, "err", probeErr)
+				"consecutive_fails", s.ConsecutiveFails, "manual_only", manualOnly, "err", probeErr)
 		}
 		t.mu.Unlock()
 		return
@@ -388,7 +388,7 @@ func (h *Heartbeat) reconcile(ctx context.Context) {
 			h.workers[key] = w
 			w.start(ctx)
 			logger.Info("heartbeat started", "entry", key,
-				"interval", e.Heartbeat.Interval, "auto_offline", e.Heartbeat.AutoOffline)
+				"interval", e.Heartbeat.Interval, "manual_only", e.Heartbeat.ManualOnly)
 		}
 	}
 	h.mu.Unlock()
@@ -446,12 +446,12 @@ func (w *hbWorker) run(ctx context.Context) {
 func (w *hbWorker) probeOnce(hb conf.HeartbeatConf) {
 	raddr, err := net.ResolveUDPAddr("udp", w.key)
 	if err != nil {
-		w.tracker.Record(w.key, 0, fmt.Errorf("resolve entry: %w", err), hb.AutoOffline, hb.Retries)
+		w.tracker.Record(w.key, 0, fmt.Errorf("resolve entry: %w", err), !hb.ManualOnly, hb.Retries)
 		return
 	}
 	conn, err := net.DialUDP("udp", nil, raddr)
 	if err != nil {
-		w.tracker.Record(w.key, 0, fmt.Errorf("dial entry: %w", err), hb.AutoOffline, hb.Retries)
+		w.tracker.Record(w.key, 0, fmt.Errorf("dial entry: %w", err), !hb.ManualOnly, hb.Retries)
 		return
 	}
 	w.mu.Lock()
@@ -478,19 +478,19 @@ func (w *hbWorker) probeOnce(hb conf.HeartbeatConf) {
 		_, err = conn.Write(pkt)
 	}
 	if err != nil {
-		w.tracker.Record(w.key, 0, err, hb.AutoOffline, hb.Retries)
+		w.tracker.Record(w.key, 0, err, !hb.ManualOnly, hb.Retries)
 		return
 	}
 
 	buf := make([]byte, 64)
 	n, err := conn.Read(buf)
 	if err != nil {
-		w.tracker.Record(w.key, 0, err, hb.AutoOffline, hb.Retries)
+		w.tracker.Record(w.key, 0, err, !hb.ManualOnly, hb.Retries)
 		return
 	}
 	if !isPongFor(buf[:n], pkt) {
-		w.tracker.Record(w.key, 0, errors.New("invalid pong"), hb.AutoOffline, hb.Retries)
+		w.tracker.Record(w.key, 0, errors.New("invalid pong"), !hb.ManualOnly, hb.Retries)
 		return
 	}
-	w.tracker.Record(w.key, time.Since(start), nil, hb.AutoOffline, hb.Retries)
+	w.tracker.Record(w.key, time.Since(start), nil, !hb.ManualOnly, hb.Retries)
 }

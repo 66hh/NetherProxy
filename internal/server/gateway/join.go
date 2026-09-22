@@ -27,16 +27,18 @@ type joinHandler struct {
 	store    *conf.Store
 	balancer *entryBalancer
 	mux      *multiplexer.Multiplexer
+	bdsTrack *bdsTracker
 	verifier *identityVerifier
 	limiter  *rateLimiter
 	client   *http.Client
 }
 
-func newJoinHandler(store *conf.Store, balancer *entryBalancer, mux *multiplexer.Multiplexer) *joinHandler {
+func newJoinHandler(store *conf.Store, balancer *entryBalancer, mux *multiplexer.Multiplexer, bdsTrack *bdsTracker) *joinHandler {
 	return &joinHandler{
 		store:    store,
 		balancer: balancer,
 		mux:      mux,
+		bdsTrack: bdsTrack,
 		verifier: newIdentityVerifier(),
 		limiter:  newRateLimiter(),
 		client: &http.Client{
@@ -49,16 +51,19 @@ func newJoinHandler(store *conf.Store, balancer *entryBalancer, mux *multiplexer
 // motd 处理 GET /v1/join, 透传服务器名片; 按客户端 IP 限流防止打爆 BDS
 func (h *joinHandler) motd(c *gin.Context) {
 	if rl := h.store.Get().Gateway.RateLimit; rl.Enable && !h.limiter.allow("ip:"+c.ClientIP(), rl) {
+		motdTotal.WithLabelValues("rate_limited").Inc()
 		logger.Warn("motd rate limited", "client", c.ClientIP())
 		writeText(c, http.StatusTooManyRequests, "rate limited")
 		return
 	}
 	backend := h.match(c.Request.Host)
 	if backend == nil {
+		motdTotal.WithLabelValues("no_route").Inc()
 		logger.Warn("no bds route for host", "host", c.Request.Host)
 		writeText(c, http.StatusNotFound, "no route for host")
 		return
 	}
+	motdTotal.WithLabelValues("ok").Inc()
 	h.forward(c, backend, nil, nil)
 }
 
@@ -66,6 +71,7 @@ func (h *joinHandler) motd(c *gin.Context) {
 func (h *joinHandler) offer(c *gin.Context) {
 	backend := h.match(c.Request.Host)
 	if backend == nil {
+		joinTotal.WithLabelValues("no_route").Inc()
 		logger.Warn("no bds route for host", "host", c.Request.Host)
 		writeText(c, http.StatusNotFound, "no route for host")
 		return
@@ -98,6 +104,7 @@ func (h *joinHandler) offer(c *gin.Context) {
 	if h.store.Get().Gateway.VerifyIdentity {
 		player, err = h.verifier.verify(body)
 		if err != nil {
+			joinTotal.WithLabelValues("identity_rejected").Inc()
 			logger.Warn("identity rejected", "client", c.ClientIP(), "err", err)
 			c.Data(http.StatusOK, "application/sdp", []byte("37"))
 			return
@@ -113,6 +120,7 @@ func (h *joinHandler) offer(c *gin.Context) {
 		rateKey = "ip:" + c.ClientIP()
 	}
 	if rl := h.store.Get().Gateway.RateLimit; rl.Enable && !h.limiter.allow(rateKey, rl) {
+		joinTotal.WithLabelValues("rate_limited").Inc()
 		logger.Warn("join rate limited", "client", c.ClientIP(), "player", player.Name, "key", rateKey)
 		c.Data(http.StatusOK, "application/sdp", []byte("37"))
 		return
@@ -122,12 +130,14 @@ func (h *joinHandler) offer(c *gin.Context) {
 	if !verified {
 		acc := h.store.Get().Gateway.Access
 		if acc.Mode == "blacklist" || acc.Mode == "whitelist" || acc.Webhook.Enable {
+			joinTotal.WithLabelValues("access_denied").Inc()
 			logger.Warn("access control requires verified identity, rejected",
 				"client", c.ClientIP(), "player", player.Name)
 			c.Data(http.StatusOK, "application/sdp", []byte("37"))
 			return
 		}
 	} else if ok, reason := h.checkAccess(player, c.ClientIP()); !ok {
+		joinTotal.WithLabelValues("access_denied").Inc()
 		logger.Warn("access denied", "client", c.ClientIP(), "player", player.Name, "xuid", player.XUID, "reason", reason)
 		c.Data(http.StatusOK, "application/sdp", []byte("37"))
 		return
@@ -181,6 +191,7 @@ func (h *joinHandler) rewriteAnswer(status int, contentType string, body []byte,
 		logger.Error("create session failed, passing through", "ufrag", res.Ufrag, "backend", res.BackendAddr, "err", err)
 		return h.passThrough(body, key)
 	}
+	joinTotal.WithLabelValues("ok").Inc()
 	logger.Info("session signaled", "ufrag", res.Ufrag, "player", player.Name, "xuid", player.XUID, "backend", res.BackendAddr, "entry", key)
 	return res.Body
 }
@@ -212,8 +223,13 @@ func (h *joinHandler) match(hostport string) *conf.BDSConf {
 
 // forward 把请求透传到匹配的 BDS 并回写响应; body 为 nil 时使用原始请求体
 // (GET), 否则使用给定内容 (POST 已读取的 offer); rewriteResp 非空时对响应
-// body 做拦截处理
+// body 做拦截处理。BDS 健康检查下线时直接 503。
 func (h *joinHandler) forward(c *gin.Context, backend *conf.BDSConf, body []byte, rewriteResp func(status int, contentType string, respBody []byte) []byte) {
+	if !h.bdsTrack.healthy(bdsKey(backend)) {
+		logger.Warn("bds offline, request rejected", "bds", bdsKey(backend))
+		writeText(c, http.StatusServiceUnavailable, "bds offline")
+		return
+	}
 	target := url.URL{
 		Scheme:   "http",
 		Host:     net.JoinHostPort(backend.Host, strconv.Itoa(backend.Port)),

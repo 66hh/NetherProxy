@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NetherProxy 控制面板</title>
+<style>
+  :root { --bg:#0d1117; --card:#161b22; --border:#30363d; --fg:#e6edf3; --dim:#8b949e;
+          --green:#3fb950; --red:#f85149; --yellow:#d29922; --gray:#6e7681; --accent:#58a6ff; }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--bg); color: var(--fg); font: 14px/1.5 "Segoe UI", system-ui, sans-serif; }
+  header { display:flex; align-items:center; gap:16px; padding:12px 24px; border-bottom:1px solid var(--border); }
+  header h1 { font-size:18px; }
+  header .spacer { flex:1; }
+  nav { display:flex; gap:4px; padding:0 24px; border-bottom:1px solid var(--border); }
+  nav button { background:none; border:none; color:var(--dim); padding:10px 16px; cursor:pointer; font-size:14px; border-bottom:2px solid transparent; }
+  nav button.active { color:var(--fg); border-bottom-color: var(--accent); }
+  main { padding: 24px; max-width: 1200px; margin: 0 auto; }
+  table { width:100%; border-collapse: collapse; }
+  th, td { text-align:left; padding:8px 12px; border-bottom:1px solid var(--border); }
+  th { color:var(--dim); font-weight:600; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:8px; padding:16px; margin-bottom:12px; }
+  .card h3 { font-size:15px; margin-bottom:8px; word-break:break-all; }
+  .row { display:flex; gap:16px; flex-wrap:wrap; color:var(--dim); font-size:13px; }
+  .row b { color:var(--fg); font-weight:600; }
+  .dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:6px; }
+  .dot.up { background:var(--green); } .dot.down { background:var(--red); } .dot.unknown { background:var(--gray); }
+  .btn { background:#21262d; color:var(--fg); border:1px solid var(--border); border-radius:6px; padding:5px 12px; cursor:pointer; font-size:13px; }
+  .btn:hover { background:#30363d; }
+  .btn.danger { color:var(--red); }
+  .btn.primary { background:var(--accent); border-color:var(--accent); color:#0d1117; font-weight:600; }
+  .btn.small { padding:2px 8px; font-size:12px; }
+  .hist { display:flex; gap:2px; margin:10px 0 4px; }
+  .hist i { flex:1; height:22px; border-radius:2px; background:var(--gray); }
+  .hist i.up { background:var(--green); } .hist i.down { background:var(--red); } .hist i.mixed { background:var(--yellow); }
+  .hist-label { display:flex; justify-content:space-between; color:var(--dim); font-size:11px; }
+  input[type=text], input[type=number], input[type=password], select { background:#0d1117; color:var(--fg); border:1px solid var(--border); border-radius:6px; padding:6px 10px; font-size:13px; width:100%; }
+  label.fld { display:block; margin-bottom:12px; }
+  label.fld span { display:block; color:var(--dim); font-size:12px; margin-bottom:4px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(240px,1fr)); gap:0 20px; }
+  .switch { position:relative; width:38px; height:20px; display:inline-block; }
+  .switch input { display:none; }
+  .switch i { position:absolute; inset:0; background:#30363d; border-radius:20px; transition:.2s; }
+  .switch i:before { content:""; position:absolute; width:16px; height:16px; border-radius:50%; background:#fff; top:2px; left:2px; transition:.2s; }
+  .switch input:checked + i { background:var(--accent); }
+  .switch input:checked + i:before { left:20px; }
+  .modal-mask { position:fixed; inset:0; background:rgba(0,0,0,.6); display:flex; align-items:center; justify-content:center; z-index:10; }
+  .modal { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:20px; width:420px; max-height:85vh; overflow:auto; }
+  .modal h2 { font-size:16px; margin-bottom:14px; }
+  .modal .ops { display:flex; justify-content:flex-end; gap:8px; margin-top:16px; }
+  .toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%); background:var(--card); border:1px solid var(--border); border-radius:8px; padding:10px 18px; z-index:20; }
+  .toast.err { border-color:var(--red); color:var(--red); }
+  .list-edit .item { display:flex; gap:8px; margin-bottom:6px; }
+  #login { max-width:360px; margin:15vh auto; }
+  .hidden { display:none !important; }
+  .mono { font-family:Consolas,monospace; font-size:12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>NetherProxy</h1>
+  <span class="spacer"></span>
+  <span id="conn-state" class="row"></span>
+  <button class="btn" onclick="logout()">退出</button>
+</header>
+<nav id="nav" class="hidden">
+  <button data-tab="sessions" class="active">会话</button>
+  <button data-tab="entries">线路</button>
+  <button data-tab="bds">BDS</button>
+  <button data-tab="config">配置</button>
+</nav>
+<main>
+  <div id="login">
+    <div class="card">
+      <h3>输入访问令牌</h3>
+      <form onsubmit="return doLogin(event)">
+        <label class="fld"><span>Token (gateway.token)</span>
+          <input type="password" id="token-input" autofocus></label>
+        <button class="btn primary" style="width:100%">登录</button>
+      </form>
+    </div>
+  </div>
+
+  <section id="tab-sessions" class="hidden">
+    <div class="card">
+      <table>
+        <thead><tr><th>玩家</th><th>XUID</th><th>客户端</th><th>线路</th><th>状态</th><th>下行/上行</th><th>时长</th><th>操作</th></tr></thead>
+        <tbody id="session-rows"></tbody>
+      </table>
+      <div id="session-empty" class="row" style="margin-top:8px">暂无会话</div>
+    </div>
+  </section>
+
+  <section id="tab-entries" class="hidden">
+    <div style="margin-bottom:12px"><button class="btn primary" onclick="openEntryModal(-1)">新增线路</button></div>
+    <div id="entry-list"></div>
+  </section>
+
+  <section id="tab-bds" class="hidden">
+    <div style="margin-bottom:12px"><button class="btn primary" onclick="openBdsModal(-1)">新增 BDS</button></div>
+    <div id="bds-list"></div>
+  </section>
+
+  <section id="tab-config" class="hidden">
+    <div id="config-form"></div>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button class="btn primary" onclick="saveConfig()">保存配置</button>
+      <button class="btn" onclick="reloadConfig()">从文件重载</button>
+      <span id="config-msg" class="row" style="align-items:center"></span>
+    </div>
+  </section>
+</main>
+
+<div id="modal-mask" class="modal-mask hidden" onclick="if(event.target===this)closeModal()">
+  <div class="modal" id="modal-body"></div>
+</div>
+<div id="toast" class="toast hidden"></div>
+
+<script>
+"use strict";
+let TOKEN = localStorage.getItem("np_token") || "";
+let CFG = null;   // 当前配置缓存
+let BDS_LIST = []; // /api/bds 缓存
+let ENTRY_LIST = [];
+
+// ---------- 基础 ----------
+function api(path, method, body) {
+  return fetch(path, {
+    method: method || "GET",
+    headers: Object.assign({ "Authorization": "Bearer " + TOKEN },
+      body ? { "Content-Type": "application/json" } : {}),
+    body: body ? JSON.stringify(body) : undefined,
+  }).then(async r => {
+    if (r.status === 401) { logout(); throw new Error("unauthorized"); }
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.details || data.error || ("HTTP " + r.status));
+    return data;
+  });
+}
+function toast(msg, isErr) {
+  const t = document.getElementById("toast");
+  t.textContent = msg; t.className = "toast" + (isErr ? " err" : "");
+  setTimeout(() => t.classList.add("hidden"), 3000);
+}
+function logout() { localStorage.removeItem("np_token"); location.reload(); }
+function doLogin(e) {
+  e.preventDefault();
+  TOKEN = document.getElementById("token-input").value.trim();
+  localStorage.setItem("np_token", TOKEN);
+  api("/api/session").then(() => initApp()).catch(() => { toast("令牌无效", true); localStorage.removeItem("np_token"); });
+  return false;
+}
+function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+function fmtBytes(n) { if (n > 1e9) return (n/1e9).toFixed(2)+" GB"; if (n > 1e6) return (n/1e6).toFixed(2)+" MB"; if (n > 1e3) return (n/1e3).toFixed(1)+" KB"; return n+" B"; }
+function fmtAge(s) { if (s > 3600) return (s/3600).toFixed(1)+"h"; if (s > 60) return (s/60).toFixed(0)+"m"; return s+"s"; }
+
+// ---------- 初始化 ----------
+function initApp() {
+  document.getElementById("login").classList.add("hidden");
+  document.getElementById("nav").classList.remove("hidden");
+  document.getElementById("tab-sessions").classList.remove("hidden");
+  document.getElementById("conn-state").innerHTML = '<span class="dot up"></span>已连接';
+  refreshAll();
+  setInterval(refreshSessions, 5000);
+  setInterval(refreshStatus, 10000);
+}
+document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
+  document.querySelectorAll("nav button").forEach(x => x.classList.remove("active"));
+  b.classList.add("active");
+  document.querySelectorAll("main section").forEach(s => s.classList.add("hidden"));
+  document.getElementById("tab-" + b.dataset.tab).classList.remove("hidden");
+});
+function refreshAll() {
+  return api("/api/config").then(c => { CFG = c; renderConfig(); })
+    .then(refreshStatus).then(refreshSessions).catch(e => toast(e.message, true));
+}
+function refreshStatus() {
+  return Promise.all([api("/api/entry"), api("/api/bds")]).then(([e, b]) => {
+    ENTRY_LIST = e.entries || []; BDS_LIST = b.bds || [];
+    renderEntries(); renderBds();
+  }).catch(e => toast(e.message, true));
+}
+function refreshSessions() {
+  return api("/api/session").then(d => renderSessions(d.sessions || [])).catch(() => {});
+}
+
+// ---------- 会话 ----------
+function renderSessions(list) {
+  const tb = document.getElementById("session-rows");
+  document.getElementById("session-empty").style.display = list.length ? "none" : "";
+  tb.innerHTML = list.map(s => `<tr>
+    <td><b>${esc(s.player || "-")}</b></td>
+    <td class="mono">${esc(s.xuid || "-")}</td>
+    <td class="mono">${esc(s.client)}</td>
+    <td class="mono">${esc(s.entry)}</td>
+    <td>${esc(s.state)}</td>
+    <td class="mono">${fmtBytes(s.tx_bytes)} / ${fmtBytes(s.rx_bytes)}</td>
+    <td>${fmtAge(s.age_seconds)}</td>
+    <td>
+      <button class="btn small danger" onclick="killSession('${esc(s.ufrag)}')">掐断</button>
+      <button class="btn small" onclick="blockSession('${esc(s.xuid)}','${esc(s.player)}')">拉黑</button>
+    </td></tr>`).join("");
+}
+function killSession(ufrag) {
+  if (!confirm("确认掐断会话 " + ufrag + "?")) return;
+  api("/api/session/" + ufrag, "DELETE").then(() => { toast("已掐断"); refreshSessions(); }).catch(e => toast(e.message, true));
+}
+function blockSession(xuid, name) {
+  if (!xuid) { toast("该会话无 XUID", true); return; }
+  if (!confirm(`将玩家 ${name} (${xuid}) 加入黑名单?`)) return;
+  const cfg = JSON.parse(JSON.stringify(CFG));
+  cfg.gateway.access.mode = "blacklist";
+  cfg.gateway.access.xuids = [...new Set([...(cfg.gateway.access.xuids || []), xuid])];
+  api("/api/config", "PUT", cfg).then(r => {
+    toast("已拉黑" + (r.restart_required ? " (部分变更需重启)" : ""));
+    CFG.gateway = cfg.gateway; renderConfig();
+  }).catch(e => toast(e.message, true));
+}
+
+// ---------- 状态历史条 ----------
+function renderHistory(stats) {
+  const B = 48, spanMs = 24 * 3600e3, now = Date.now();
+  const events = (stats && stats.history) || [];
+  let html = '<div class="hist">';
+  for (let i = 0; i < B; i++) {
+    const t = now - (B - 1 - i) * spanMs / B;
+    let st = null;
+    for (const e of events) if (new Date(e.time).getTime() <= t) st = e.healthy;
+    if (st === null) st = stats ? stats.healthy : null; // 无历史时按当前状态
+    html += `<i class="${st === null ? "" : st ? "up" : "down"}"></i>`;
+  }
+  html += '</div><div class="hist-label"><span>24小时前</span><span>现在</span></div>';
+  return html;
+}
+
+// ---------- 线路 ----------
+function renderEntries() {
+  document.getElementById("entry-list").innerHTML = ENTRY_LIST.map((e, i) => `
+    <div class="card">
+      <h3><span class="dot ${e.healthy ? "up" : "down"}"></span>${esc(e.key)} ${e.enable ? "" : "(已禁用)"}</h3>
+      <div class="row"><span>活跃会话 <b>${e.active_sessions}</b> / ${e.max_session || "不限"}</span>
+      ${e.stats ? `<span>探测 <b>${e.stats.total_probes}</b> 次, 失败 <b>${e.stats.failed_probes}</b></span>
+      <span>RTT <b>${e.stats.last_rtt_ms}ms</b></span>` : "<span>心跳未开启</span>"}
+      <span style="flex:1"></span>
+      <button class="btn small" onclick="openEntryModal(${i})">编辑</button>
+      <button class="btn small danger" onclick="delEntry(${i})">删除</button></div>
+      ${renderHistory(e.stats)}
+    </div>`).join("");
+}
+function openEntryModal(i) {
+  const e = i >= 0 ? configEntry(i) : { enable: true, host: "", port: 19131, max_session: 100, heartbeat: { enable: false, auto_offline: true, interval: "5s", timeout: "2s", retries: 3 } };
+  openModal(`<h2>${i >= 0 ? "编辑" : "新增"}线路</h2>
+    <label class="fld"><span>主机 (公网地址)</span><input type="text" id="m-host" value="${esc(e.host)}"></label>
+    <label class="fld"><span>端口</span><input type="number" id="m-port" value="${e.port}"></label>
+    <label class="fld"><span>最大会话数 (0 不限)</span><input type="number" id="m-maxsession" value="${e.max_session}"></label>
+    ${fldSwitch("启用", "m-enable", e.enable)}
+    ${fldSwitch("心跳探测", "m-hb-enable", e.heartbeat.enable)}
+    ${fldSwitch("失败自动下线", "m-hb-offline", e.heartbeat.auto_offline)}
+    <label class="fld"><span>心跳间隔</span><input type="text" id="m-hb-interval" value="${esc(e.heartbeat.interval)}"></label>
+    <label class="fld"><span>超时</span><input type="text" id="m-hb-timeout" value="${esc(e.heartbeat.timeout)}"></label>
+    <label class="fld"><span>失败次数阈值</span><input type="number" id="m-hb-retries" value="${e.heartbeat.retries}"></label>
+    <div class="ops"><button class="btn" onclick="closeModal()">取消</button>
+    <button class="btn primary" onclick="saveEntry(${i})">保存</button></div>`);
+}
+function configEntry(i) { return CFG.entry[i]; }
+function saveEntry(i) {
+  const cfg = JSON.parse(JSON.stringify(CFG));
+  const e = {
+    enable: gbool("m-enable"), host: gval("m-host"), port: +gval("m-port"), max_session: +gval("m-maxsession"),
+    heartbeat: { enable: gbool("m-hb-enable"), auto_offline: gbool("m-hb-offline"),
+      interval: gval("m-hb-interval"), timeout: gval("m-hb-timeout"), retries: +gval("m-hb-retries") },
+  };
+  if (i >= 0) cfg.entry[i] = e; else cfg.entry.push(e);
+  putConfig(cfg);
+}
+function delEntry(i) {
+  if (!confirm("删除线路 " + ENTRY_LIST[i].key + "?")) return;
+  const cfg = JSON.parse(JSON.stringify(CFG));
+  cfg.entry.splice(i, 1);
+  putConfig(cfg);
+}
+
+// ---------- BDS ----------
+function renderBds() {
+  document.getElementById("bds-list").innerHTML = BDS_LIST.map((b, i) => `
+    <div class="card">
+      <h3><span class="dot ${b.healthy ? "up" : "down"}"></span>${esc(b.domain)} → ${esc(b.key)} ${b.enable ? "" : "(已禁用)"}</h3>
+      <div class="row">
+      ${b.stats ? `<span>探测 <b>${b.stats.total_probes}</b> 次, 失败 <b>${b.stats.failed_probes}</b></span>
+      <span>RTT <b>${b.stats.last_rtt_ms}ms</b></span>` : "<span>心跳未开启</span>"}
+      <span style="flex:1"></span>
+      <button class="btn small" onclick="openBdsModal(${i})">编辑</button>
+      <button class="btn small danger" onclick="delBds(${i})">删除</button></div>
+      ${renderHistory(b.stats)}
+    </div>`).join("");
+}
+function openBdsModal(i) {
+  const b = i >= 0 ? CFG.bds[i] : { enable: true, domain: "", host: "", port: 19132, heartbeat: { enable: false, auto_offline: true, interval: "5s", timeout: "2s", retries: 3 } };
+  openModal(`<h2>${i >= 0 ? "编辑" : "新增"} BDS</h2>
+    <label class="fld"><span>绑定域名 (支持 * 通配)</span><input type="text" id="m-domain" value="${esc(b.domain)}"></label>
+    <label class="fld"><span>主机</span><input type="text" id="m-host" value="${esc(b.host)}"></label>
+    <label class="fld"><span>端口</span><input type="number" id="m-port" value="${b.port}"></label>
+    ${fldSwitch("启用", "m-enable", b.enable)}
+    ${fldSwitch("健康探测", "m-hb-enable", b.heartbeat.enable)}
+    ${fldSwitch("失败自动下线", "m-hb-offline", b.heartbeat.auto_offline)}
+    <label class="fld"><span>探测间隔</span><input type="text" id="m-hb-interval" value="${esc(b.heartbeat.interval)}"></label>
+    <label class="fld"><span>超时</span><input type="text" id="m-hb-timeout" value="${esc(b.heartbeat.timeout)}"></label>
+    <label class="fld"><span>失败次数阈值</span><input type="number" id="m-hb-retries" value="${b.heartbeat.retries}"></label>
+    <div class="ops"><button class="btn" onclick="closeModal()">取消</button>
+    <button class="btn primary" onclick="saveBds(${i})">保存</button></div>`);
+}
+function saveBds(i) {
+  const cfg = JSON.parse(JSON.stringify(CFG));
+  const b = {
+    enable: gbool("m-enable"), domain: gval("m-domain"), host: gval("m-host"), port: +gval("m-port"),
+    heartbeat: { enable: gbool("m-hb-enable"), auto_offline: gbool("m-hb-offline"),
+      interval: gval("m-hb-interval"), timeout: gval("m-hb-timeout"), retries: +gval("m-hb-retries") },
+  };
+  if (i >= 0) cfg.bds[i] = b; else cfg.bds.push(b);
+  putConfig(cfg);
+}
+function delBds(i) {
+  if (!confirm("删除 BDS " + BDS_LIST[i].domain + "?")) return;
+  const cfg = JSON.parse(JSON.stringify(CFG));
+  cfg.bds.splice(i, 1);
+  putConfig(cfg);
+}
+
+// ---------- 配置 ----------
+const SCHEMA = [
+  { group: "日志", fields: [
+    ["log.level", "级别", "select", ["debug","info","warn","error"]],
+    ["log.format", "格式", "select", ["text","json"]],
+    ["log.file", "日志文件 (留空仅控制台)", "text"],
+    ["log.max_size", "单文件大小 (MB, 0=100)", "number"],
+    ["log.max_backups", "保留份数 (0 不限)", "number"],
+    ["log.max_age", "保留天数 (0 不限)", "number"],
+    ["log.compress", "压缩旧日志", "bool"],
+  ]},
+  { group: "网关", fields: [
+    ["gateway.host", "监听主机", "text"],
+    ["gateway.port", "监听端口", "number"],
+    ["gateway.token", "访问令牌 (显示 *** 表示不修改)", "text"],
+    ["gateway.verify_identity", "验证玩家身份 JWT", "bool"],
+    ["gateway.relay_only", "中继模式 (隐藏客户端真实地址)", "bool"],
+    ["gateway.api_auth_exempt", "免认证 API 路由", "list"],
+  ]},
+  { group: "TLS", fields: [
+    ["gateway.tls.enable", "启用 TLS", "bool"],
+    ["gateway.tls.cert", "证书 (PEM)", "text"],
+    ["gateway.tls.key", "私钥", "text"],
+  ]},
+  { group: "指标", fields: [["gateway.metrics.enable", "启用 Prometheus (/api/metrics)", "bool"]]},
+  { group: "访问控制", fields: [
+    ["gateway.access.mode", "名单模式", "select", ["off","blacklist","whitelist"]],
+    ["gateway.access.xuids", "XUID 名单", "list"],
+    ["gateway.access.webhook.enable", "启用 webhook", "bool"],
+    ["gateway.access.webhook.url", "webhook 地址", "text"],
+    ["gateway.access.webhook.timeout", "webhook 超时", "text"],
+  ]},
+  { group: "限流", fields: [
+    ["gateway.rate_limit.enable", "启用限流", "bool"],
+    ["gateway.rate_limit.interval", "窗口", "text"],
+    ["gateway.rate_limit.max_joins", "每窗口最大 join", "number"],
+    ["gateway.rate_limit.max_keys", "最大跟踪 key 数", "number"],
+  ]},
+  { group: "复用器", fields: [
+    ["multiplexer.host", "监听主机", "text"],
+    ["multiplexer.port", "监听端口", "number"],
+  ]},
+  { group: "会话超时", fields: [
+    ["session.signaled_timeout", "等待首个 STUN", "text"],
+    ["session.active_idle_timeout", "活跃转空闲", "text"],
+    ["session.idle_reap_timeout", "空闲回收", "text"],
+    ["session.tuple_stale_timeout", "5-tuple 软状态", "text"],
+  ]},
+  { group: "统计", fields: [["stats.status_history_size", "状态历史上限", "number"]]},
+];
+function getPath(o, p) { return p.split(".").reduce((a, k) => a == null ? a : a[k], o); }
+function setPath(o, p, v) { const ks = p.split("."); const last = ks.pop(); ks.reduce((a, k) => a[k] ??= {}, o)[last] = v; }
+function fldSwitch(label, id, on) {
+  return `<label class="fld"><span>${label}</span><label class="switch"><input type="checkbox" id="${id}" ${on ? "checked" : ""}><i></i></label></label>`;
+}
+function renderConfig() {
+  if (!CFG) return;
+  document.getElementById("config-form").innerHTML = SCHEMA.map(g => `
+    <div class="card"><h3>${g.group}</h3><div class="grid">
+    ${g.fields.map(([key, label, type, opts]) => {
+      const id = "cfg-" + key;
+      const v = getPath(CFG, key);
+      if (type === "bool") return fldSwitch(label, id, !!v);
+      if (type === "select") return `<label class="fld"><span>${label}</span><select id="${id}">${opts.map(o => `<option ${o === v ? "selected" : ""}>${o}</option>`).join("")}</select></label>`;
+      if (type === "number") return `<label class="fld"><span>${label}</span><input type="number" id="${id}" value="${v}"></label>`;
+      if (type === "list") return `<label class="fld"><span>${label} (每行一个)</span><textarea id="${id}" rows="3" style="width:100%;background:#0d1117;color:var(--fg);border:1px solid var(--border);border-radius:6px">${(v || []).join("\n")}</textarea></label>`;
+      return `<label class="fld"><span>${label}</span><input type="text" id="${id}" value="${esc(v ?? "")}"></label>`;
+    }).join("")}</div></div>`).join("");
+}
+function collectConfig() {
+  const cfg = JSON.parse(JSON.stringify(CFG));
+  for (const g of SCHEMA) for (const [key, , type] of g.fields) {
+    const el = document.getElementById("cfg-" + key);
+    let v;
+    if (type === "bool") v = el.checked;
+    else if (type === "number") v = +el.value;
+    else if (type === "list") v = el.value.split("\n").map(s => s.trim()).filter(Boolean);
+    else v = el.value;
+    setPath(cfg, key, v);
+  }
+  return cfg;
+}
+function putConfig(cfg) {
+  api("/api/config", "PUT", cfg).then(r => {
+    toast("已保存" + (r.restart_required ? " (部分变更需重启生效)" : ""));
+    CFG = cfg; renderConfig(); refreshStatus(); closeModal();
+  }).catch(e => toast(e.message, true));
+}
+function saveConfig() { putConfig(collectConfig()); }
+function reloadConfig() {
+  api("/api/config/reload", "POST").then(() => { toast("已重载"); refreshAll(); }).catch(e => toast(e.message, true));
+}
+
+// ---------- modal ----------
+function openModal(html) {
+  document.getElementById("modal-body").innerHTML = html;
+  document.getElementById("modal-mask").classList.remove("hidden");
+}
+function closeModal() { document.getElementById("modal-mask").classList.add("hidden"); }
+function gval(id) { return document.getElementById(id).value.trim(); }
+function gbool(id) { return document.getElementById(id).checked; }
+
+// ---------- 启动 ----------
+if (TOKEN) api("/api/session").then(() => initApp()).catch(() => {});
+</script>
+</body>
+</html>

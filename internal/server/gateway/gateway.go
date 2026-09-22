@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"crypto/tls"
+	_ "embed"
 	"errors"
 	"fmt"
 	"net"
@@ -21,6 +22,9 @@ import (
 	"NetherProxy/internal/logger"
 	"NetherProxy/internal/server/multiplexer"
 )
+
+//go:embed web/index.html
+var panelHTML []byte
 
 var (
 	requestsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -47,8 +51,9 @@ func init() {
 
 // Gateway 网关 HTTP 服务
 type Gateway struct {
-	store *conf.Store
-	srv   *http.Server
+	store  *conf.Store
+	srv    *http.Server
+	prober *bdsProber
 }
 
 // New 创建网关服务, 监听地址/TLS/metrics 开关取启动时配置, 之后重载不生效
@@ -62,9 +67,17 @@ func New(store *conf.Store, mux *multiplexer.Multiplexer, tracker *multiplexer.E
 		router.Use(collectMetrics())
 	}
 
+	// 控制面板
+	router.GET("/", func(c *gin.Context) {
+		c.Data(http.StatusOK, "text/html; charset=utf-8", panelHTML)
+	})
+
 	// NetherNet 信令端点, 客户端硬编码路径, 必须挂在根路径
 	balancer := newEntryBalancer(store, mux.Table(), tracker)
-	join := newJoinHandler(store, balancer, mux)
+	bdsTrack := newBDSTracker(store)
+	prober := newBDSProber(store, bdsTrack)
+	prober.start()
+	join := newJoinHandler(store, balancer, mux, bdsTrack)
 	router.GET("/v1/join", join.motd)
 	router.POST("/v1/join/:networkID", join.offer)
 
@@ -82,6 +95,9 @@ func New(store *conf.Store, mux *multiplexer.Multiplexer, tracker *multiplexer.E
 	// 线路状态与心跳统计
 	api.GET("/entry", handleEntryStatus(store, tracker, balancer))
 
+	// BDS 状态与健康统计
+	api.GET("/bds", handleBDSStatus(store, bdsTrack))
+
 	// 会话列表 (含玩家信息与流量统计)
 	api.GET("/session", handleSessionList(mux.Table()))
 	// 掐断指定会话
@@ -90,7 +106,8 @@ func New(store *conf.Store, mux *multiplexer.Multiplexer, tracker *multiplexer.E
 	registerConfigAPI(api, store)
 
 	return &Gateway{
-		store: store,
+		store:  store,
+		prober: prober,
 		srv: &http.Server{
 			Addr:    net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port)),
 			Handler: router,
@@ -122,6 +139,7 @@ func (g *Gateway) Start() error {
 
 // Shutdown 优雅关闭网关服务, 等待进行中的请求处理完毕
 func (g *Gateway) Shutdown(ctx context.Context) error {
+	g.prober.close()
 	return g.srv.Shutdown(ctx)
 }
 

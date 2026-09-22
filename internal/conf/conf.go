@@ -185,11 +185,17 @@ type LogConf struct {
 	Compress   bool   `yaml:"compress" json:"compress"`       // 是否压缩轮转后的旧日志
 }
 
+// 统计配置
+type StatsConf struct {
+	StatusHistorySize int `yaml:"status_history_size" json:"status_history_size"` // 每条线路/BDS 保留的状态变化历史上限, 0 用默认 500
+}
+
 type Conf struct {
 	Log         LogConf         `yaml:"log" json:"log"`
 	Gateway     GatewayConf     `yaml:"gateway" json:"gateway"`
 	Multiplexer MultiplexerConf `yaml:"multiplexer" json:"multiplexer"`
 	Session     SessionConf     `yaml:"session" json:"session"`
+	Stats       StatsConf       `yaml:"stats" json:"stats"`
 	BDS         []BDSConf       `yaml:"bds" json:"bds"`
 	Entry       []EntryConf     `yaml:"entry" json:"entry"`
 }
@@ -348,6 +354,10 @@ func (c *Conf) Validate() error {
 		if err := checkHeartbeat(fmt.Sprintf("entry[%d].heartbeat", i), entry.Heartbeat); err != nil {
 			errs = append(errs, err)
 		}
+	}
+
+	if c.Stats.StatusHistorySize < 0 {
+		errs = append(errs, errors.New("stats.status_history_size: must not be negative"))
 	}
 
 	return errors.Join(errs...)

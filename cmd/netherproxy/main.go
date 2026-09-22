@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/signal"
@@ -56,7 +57,7 @@ func main() {
 
 	store := conf.NewStore(configPath, cfg)
 	table := session.NewTable(store)
-	tracker := multiplexer.NewEntryTracker(entryStatsPath)
+	tracker := multiplexer.NewEntryTracker(entryStatsPath, store)
 
 	mux := multiplexer.New(store, table, tracker)
 	if err := mux.Start(); err != nil {
@@ -69,6 +70,19 @@ func main() {
 	heartbeat.Start()
 
 	gw := gateway.New(store, mux, tracker)
+
+	// 打印面板地址与 token
+	panelHost := cfg.Gateway.Host
+	if panelHost == "0.0.0.0" || panelHost == "::" || panelHost == "" {
+		panelHost = "127.0.0.1"
+	}
+	scheme := "http"
+	if cfg.Gateway.TLS.Enable {
+		scheme = "https"
+	}
+	logger.Info("web panel ready",
+		"url", fmt.Sprintf("%s://%s:%d/", scheme, panelHost, cfg.Gateway.Port),
+		"token", cfg.Gateway.Token)
 
 	// gateway 启动错误经 channel 上报, 统一走优雅关闭路径
 	errCh := make(chan error, 1)

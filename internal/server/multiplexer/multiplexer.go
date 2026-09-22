@@ -182,12 +182,14 @@ func (m *Multiplexer) handle(pkt []byte, src netip.AddrPort) {
 		sess := m.table.ByUfrag(ufrag)
 		if sess == nil {
 			// 未知 ufrag：直接丢弃，不回应（入口 DDoS 缓解）。
+			DropCount("unknown_ufrag")
 			logger.Debug("STUN with unknown ufrag dropped", "ufrag", ufrag, "src", src)
 			return
 		}
 		// 安全校验: 携带 MESSAGE-INTEGRITY 的 STUN 必须通过 HMAC 校验 (密钥 = ice-pwd)
 		ok, verified := verifySTUNIntegrity(pkt, sess.Pwd)
 		if !ok {
+			DropCount("integrity_failed")
 			logger.Warn("STUN integrity check failed, dropped", "ufrag", ufrag, "src", src)
 			return
 		}
@@ -197,6 +199,7 @@ func (m *Multiplexer) handle(pkt []byte, src netip.AddrPort) {
 			m.table.BindClient(sess, src)
 		}
 		sess.AddRx(len(pkt))
+		trafficBytes.WithLabelValues("rx").Add(float64(len(pkt)))
 		if _, err := sess.Backend().Write(pkt); err != nil {
 			logger.Debug("forward STUN to backend failed", "ufrag", ufrag, "err", err)
 		}
@@ -206,11 +209,13 @@ func (m *Multiplexer) handle(pkt []byte, src netip.AddrPort) {
 	// 非 STUN（DTLS/SCTP）：必须匹配已学习的 5-tuple。
 	sess := m.table.ByClient(src)
 	if sess == nil {
+		DropCount("unknown_tuple")
 		logger.Debug("non-STUN packet with unknown 5-tuple dropped", "src", src, "len", len(pkt))
 		return
 	}
 	sess.Touch()
 	sess.AddRx(len(pkt))
+	trafficBytes.WithLabelValues("rx").Add(float64(len(pkt)))
 	if _, err := sess.Backend().Write(pkt); err != nil {
 		logger.Debug("forward data to backend failed", "client", src, "err", err)
 	}
@@ -243,6 +248,7 @@ func (m *Multiplexer) backendLoop(sess *session.Session) {
 			continue // 客户端地址尚未学习，无法回包
 		}
 		sess.AddTx(n)
+		trafficBytes.WithLabelValues("tx").Add(float64(n))
 		if _, err := m.public.WriteToUDPAddrPort(buf[:n], client); err != nil {
 			logger.Debug("forward to client failed", "ufrag", sess.Ufrag, "err", err)
 		}

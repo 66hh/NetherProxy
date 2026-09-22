@@ -79,21 +79,29 @@ func (m *Multiplexer) replyPong(ping []byte, src netip.AddrPort) {
 	}
 }
 
+// StatusEvent 一次健康状态变化
+type StatusEvent struct {
+	Time    time.Time `json:"time"`
+	Healthy bool      `json:"healthy"`
+}
+
 // EntryStats 线路心跳统计
 type EntryStats struct {
-	Healthy          bool      `json:"healthy"`
-	TotalProbes      uint64    `json:"total_probes"`
-	FailedProbes     uint64    `json:"failed_probes"`
-	ConsecutiveFails int       `json:"consecutive_fails"`
-	LastRTTMs        float64   `json:"last_rtt_ms"`
-	LastError        string    `json:"last_error,omitempty"`
-	LastChange       time.Time `json:"last_change"`
+	Healthy          bool          `json:"healthy"`
+	TotalProbes      uint64        `json:"total_probes"`
+	FailedProbes     uint64        `json:"failed_probes"`
+	ConsecutiveFails int           `json:"consecutive_fails"`
+	LastRTTMs        float64       `json:"last_rtt_ms"`
+	LastError        string        `json:"last_error,omitempty"`
+	LastChange       time.Time     `json:"last_change"`
+	History          []StatusEvent `json:"history,omitempty"` // 状态变化时间线, 用于状态图
 
 	unresponsive bool // 已记录过"无响应"日志, 避免刷屏
 }
 
 // EntryTracker 跟踪各线路的心跳统计与可用状态, 统计持久化到独立 JSON 文件
 type EntryTracker struct {
+	store *conf.Store
 	mu    sync.RWMutex
 	stats map[string]*EntryStats
 
@@ -105,8 +113,8 @@ type EntryTracker struct {
 }
 
 // NewEntryTracker 创建跟踪器, 加载既有统计并启动后台落盘循环
-func NewEntryTracker(path string) *EntryTracker {
-	t := &EntryTracker{stats: make(map[string]*EntryStats), path: path}
+func NewEntryTracker(path string, store *conf.Store) *EntryTracker {
+	t := &EntryTracker{store: store, stats: make(map[string]*EntryStats), path: path}
 	t.load()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.cancel = cancel
@@ -194,12 +202,29 @@ func (t *EntryTracker) flush() {
 	}
 }
 
+// statsHistorySize 返回配置的状态历史上限
+func (t *EntryTracker) statsHistorySize() int {
+	return t.store.Get().Stats.StatusHistorySize
+}
+
 // Healthy 报告线路是否可参与路由 (未知线路默认可用)
 func (t *EntryTracker) Healthy(key string) bool {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	s := t.stats[key]
 	return s == nil || s.Healthy
+}
+
+// appendHistory 追加状态变化事件, 超出上限 (stats.status_history_size) 丢弃最旧。
+// 调用者须持有锁。
+func (s *EntryStats) appendHistory(healthy bool, maxSize int) {
+	if maxSize <= 0 {
+		maxSize = 500
+	}
+	s.History = append(s.History, StatusEvent{Time: time.Now(), Healthy: healthy})
+	if len(s.History) > maxSize {
+		s.History = s.History[len(s.History)-maxSize:]
+	}
 }
 
 // Record 记录一次探测结果。autoOffline 为 true 且连续失败达到 retries 时
@@ -224,6 +249,7 @@ func (t *EntryTracker) Record(key string, rtt time.Duration, probeErr error, aut
 			if autoOffline && s.Healthy {
 				s.Healthy = false
 				s.LastChange = time.Now()
+				s.appendHistory(false, t.statsHistorySize())
 				entryHealthy.WithLabelValues(key).Set(0)
 			}
 			logger.Error("entry unresponsive", "entry", key,

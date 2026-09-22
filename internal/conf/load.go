@@ -52,6 +52,9 @@ func Default() *Conf {
 			Host: "0.0.0.0",
 			Port: 19131,
 		},
+		Stats: StatsConf{
+			StatusHistorySize: 500,
+		},
 		Session: SessionConf{
 			SignaledTimeout:   "30s",
 			ActiveIdleTimeout: "120s",

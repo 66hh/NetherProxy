@@ -75,12 +75,45 @@ type MultiplexerConf struct {
 	Port int    `yaml:"port" json:"port"` // 复用器端口
 }
 
+// 会话超时配置
+type SessionConf struct {
+	SignaledTimeout   string `yaml:"signaled_timeout" json:"signaled_timeout"`       // 信令完成后等待首个 STUN 的超时, 如 "30s"
+	ActiveIdleTimeout string `yaml:"active_idle_timeout" json:"active_idle_timeout"` // 活跃会话空闲多久转 Idle, 如 "120s"
+	IdleReapTimeout   string `yaml:"idle_reap_timeout" json:"idle_reap_timeout"`     // Idle 会话多久后回收, 如 "300s"
+	TupleStaleTimeout string `yaml:"tuple_stale_timeout" json:"tuple_stale_timeout"` // 客户端地址软状态有效期, 如 "60s"
+}
+
+// Signaled 信令超时
+func (s SessionConf) Signaled() time.Duration {
+	d, _ := time.ParseDuration(s.SignaledTimeout)
+	return d
+}
+
+// ActiveIdle 活跃空闲超时
+func (s SessionConf) ActiveIdle() time.Duration {
+	d, _ := time.ParseDuration(s.ActiveIdleTimeout)
+	return d
+}
+
+// IdleReap Idle 回收超时
+func (s SessionConf) IdleReap() time.Duration {
+	d, _ := time.ParseDuration(s.IdleReapTimeout)
+	return d
+}
+
+// TupleStale 5-tuple 软状态有效期
+func (s SessionConf) TupleStale() time.Duration {
+	d, _ := time.ParseDuration(s.TupleStaleTimeout)
+	return d
+}
+
 // BDS服务器配置, 支持填写多个服务器并绑定域名
 type BDSConf struct {
-	Enable bool   `yaml:"enable" json:"enable"` // 是否启用
-	Domain string `yaml:"domain" json:"domain"` // 绑定域名/Ip (支持通配符, 越靠前的条目匹配优先级越高)
-	Host   string `yaml:"host" json:"host"`     // BDS主机
-	Port   int    `yaml:"port" json:"port"`     // BDS网关端口
+	Enable    bool          `yaml:"enable" json:"enable"`       // 是否启用
+	Domain    string        `yaml:"domain" json:"domain"`       // 绑定域名/Ip (支持通配符, 越靠前的条目匹配优先级越高)
+	Host      string        `yaml:"host" json:"host"`           // BDS主机
+	Port      int           `yaml:"port" json:"port"`           // BDS网关端口
+	Heartbeat HeartbeatConf `yaml:"heartbeat" json:"heartbeat"` // 健康探测配置 (HTTP GET /v1/join)
 }
 
 // MatchDomain 判断 host 是否匹配配置的 Domain 模式, 匹配不区分大小写:
@@ -146,6 +179,7 @@ type Conf struct {
 	Log         LogConf         `yaml:"log" json:"log"`
 	Gateway     GatewayConf     `yaml:"gateway" json:"gateway"`
 	Multiplexer MultiplexerConf `yaml:"multiplexer" json:"multiplexer"`
+	Session     SessionConf     `yaml:"session" json:"session"`
 	BDS         []BDSConf       `yaml:"bds" json:"bds"`
 	Entry       []EntryConf     `yaml:"entry" json:"entry"`
 }
@@ -224,6 +258,20 @@ func (c *Conf) Validate() error {
 		errs = append(errs, err)
 	}
 
+	for _, item := range []struct {
+		field string
+		value string
+	}{
+		{"session.signaled_timeout", c.Session.SignaledTimeout},
+		{"session.active_idle_timeout", c.Session.ActiveIdleTimeout},
+		{"session.idle_reap_timeout", c.Session.IdleReapTimeout},
+		{"session.tuple_stale_timeout", c.Session.TupleStaleTimeout},
+	} {
+		if d, err := time.ParseDuration(item.value); err != nil || d <= 0 {
+			errs = append(errs, fmt.Errorf("%s: invalid duration %q", item.field, item.value))
+		}
+	}
+
 	for i, bds := range c.BDS {
 
 		if !bds.Enable {
@@ -239,6 +287,10 @@ func (c *Conf) Validate() error {
 		}
 
 		if err := checkPort(fmt.Sprintf("bds[%d].port", i), bds.Port); err != nil {
+			errs = append(errs, err)
+		}
+
+		if err := checkHeartbeat(fmt.Sprintf("bds[%d].heartbeat", i), bds.Heartbeat); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -261,20 +313,29 @@ func (c *Conf) Validate() error {
 			errs = append(errs, fmt.Errorf("entry[%d].max_session: must not be negative", i))
 		}
 
-		if entry.Heartbeat.Enable {
-			if _, err := time.ParseDuration(entry.Heartbeat.Interval); err != nil || entry.Heartbeat.IntervalDuration() <= 0 {
-				errs = append(errs, fmt.Errorf("entry[%d].heartbeat.interval: invalid duration %q", i, entry.Heartbeat.Interval))
-			}
-			if _, err := time.ParseDuration(entry.Heartbeat.Timeout); err != nil || entry.Heartbeat.TimeoutDuration() <= 0 {
-				errs = append(errs, fmt.Errorf("entry[%d].heartbeat.timeout: invalid duration %q", i, entry.Heartbeat.Timeout))
-			}
-			if entry.Heartbeat.Retries < 1 {
-				errs = append(errs, fmt.Errorf("entry[%d].heartbeat.retries: must be >= 1", i))
-			}
+		if err := checkHeartbeat(fmt.Sprintf("entry[%d].heartbeat", i), entry.Heartbeat); err != nil {
+			errs = append(errs, err)
 		}
 	}
 
 	return errors.Join(errs...)
+}
+
+// checkHeartbeat 校验心跳配置 (未启用时跳过)
+func checkHeartbeat(field string, hb HeartbeatConf) error {
+	if !hb.Enable {
+		return nil
+	}
+	if _, err := time.ParseDuration(hb.Interval); err != nil || hb.IntervalDuration() <= 0 {
+		return fmt.Errorf("%s.interval: invalid duration %q", field, hb.Interval)
+	}
+	if _, err := time.ParseDuration(hb.Timeout); err != nil || hb.TimeoutDuration() <= 0 {
+		return fmt.Errorf("%s.timeout: invalid duration %q", field, hb.Timeout)
+	}
+	if hb.Retries < 1 {
+		return fmt.Errorf("%s.retries: must be >= 1", field)
+	}
+	return nil
 }
 
 func checkPort(field string, port int) error {

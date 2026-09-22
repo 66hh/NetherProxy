@@ -50,12 +50,25 @@ func Default() *Conf {
 			Host: "0.0.0.0",
 			Port: 19131,
 		},
+		Session: SessionConf{
+			SignaledTimeout:   "30s",
+			ActiveIdleTimeout: "120s",
+			IdleReapTimeout:   "300s",
+			TupleStaleTimeout: "60s",
+		},
 		BDS: []BDSConf{
 			{
 				Enable: true,
 				Domain: "*",
 				Host:   "127.0.0.1",
 				Port:   19132,
+				Heartbeat: HeartbeatConf{
+					Enable:      false,
+					AutoOffline: true,
+					Interval:    "5s",
+					Timeout:     "2s",
+					Retries:     3,
+				},
 			},
 		},
 		Entry: []EntryConf{

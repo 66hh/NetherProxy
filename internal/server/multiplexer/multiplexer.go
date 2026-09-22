@@ -219,6 +219,11 @@ func (m *Multiplexer) handle(pkt []byte, src netip.AddrPort) {
 	if _, err := sess.Backend().Write(pkt); err != nil {
 		logger.Debug("forward data to backend failed", "client", src, "err", err)
 	}
+	// 玩家正常退出时的 DTLS close_notify: 送达后回收会话, 不等超时
+	if isDTLSAlert(pkt) {
+		logger.Info("client sent DTLS alert, closing session", "ufrag", sess.Ufrag, "player", sess.Player)
+		m.table.RemoveByUfrag(sess.Ufrag)
+	}
 }
 
 // backendLoop 是一个会话的回包循环：BDS -> 客户端。
@@ -252,7 +257,20 @@ func (m *Multiplexer) backendLoop(sess *session.Session) {
 		if _, err := m.public.WriteToUDPAddrPort(buf[:n], client); err != nil {
 			logger.Debug("forward to client failed", "ufrag", sess.Ufrag, "err", err)
 		}
+		if isDTLSAlert(buf[:n]) {
+			logger.Info("backend sent DTLS alert, closing session", "ufrag", sess.Ufrag, "player", sess.Player)
+			m.table.RemoveByUfrag(sess.Ufrag)
+			return
+		}
 	}
+}
+
+// isDTLSAlert 检测加密 DTLS alert 记录 (epoch>0)。游戏中的加密 alert
+// 几乎只有 close_notify 与 fatal alert, 均表示连接即将结束, 收到即回收会话。
+//
+// DTLS 记录头: type(1) version(2) epoch(2) seq(6) len(2)
+func isDTLSAlert(b []byte) bool {
+	return len(b) >= 13 && b[0] == 21 && binary.BigEndian.Uint16(b[3:5]) > 0
 }
 
 // parseSTUNServerUfrag 零分配解析 STUN 消息, 返回 USERNAME 属性中冒号

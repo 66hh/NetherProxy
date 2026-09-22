@@ -3,6 +3,8 @@ package conf
 import (
 	"errors"
 	"fmt"
+	"net"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -52,6 +54,7 @@ type RateLimitConf struct {
 	Enable   bool   `yaml:"enable" json:"enable"`       // 是否启用
 	Interval string `yaml:"interval" json:"interval"`   // 窗口长度, 如 "60s"
 	MaxJoins int    `yaml:"max_joins" json:"max_joins"` // 每窗口每 XUID 最大 join 次数
+	MaxKeys  int    `yaml:"max_keys" json:"max_keys"`   // 跟踪的最大 key 数, 超过整体重置 (防伪造 XUID 撑大内存), 0 用默认 1000
 }
 
 // 网关服务器配置
@@ -82,28 +85,36 @@ type SessionConf struct {
 	TupleStaleTimeout string `yaml:"tuple_stale_timeout" json:"tuple_stale_timeout"` // 客户端地址软状态有效期, 如 "60s"
 }
 
-// Signaled 信令超时
+// Signaled 信令超时 (默认 30s)
 func (s SessionConf) Signaled() time.Duration {
-	d, _ := time.ParseDuration(s.SignaledTimeout)
-	return d
+	if d, err := time.ParseDuration(s.SignaledTimeout); err == nil && d > 0 {
+		return d
+	}
+	return 30 * time.Second
 }
 
-// ActiveIdle 活跃空闲超时
+// ActiveIdle 活跃空闲超时 (默认 120s)
 func (s SessionConf) ActiveIdle() time.Duration {
-	d, _ := time.ParseDuration(s.ActiveIdleTimeout)
-	return d
+	if d, err := time.ParseDuration(s.ActiveIdleTimeout); err == nil && d > 0 {
+		return d
+	}
+	return 120 * time.Second
 }
 
-// IdleReap Idle 回收超时
+// IdleReap Idle 回收超时 (默认 300s)
 func (s SessionConf) IdleReap() time.Duration {
-	d, _ := time.ParseDuration(s.IdleReapTimeout)
-	return d
+	if d, err := time.ParseDuration(s.IdleReapTimeout); err == nil && d > 0 {
+		return d
+	}
+	return 300 * time.Second
 }
 
-// TupleStale 5-tuple 软状态有效期
+// TupleStale 5-tuple 软状态有效期 (默认 60s)
 func (s SessionConf) TupleStale() time.Duration {
-	d, _ := time.ParseDuration(s.TupleStaleTimeout)
-	return d
+	if d, err := time.ParseDuration(s.TupleStaleTimeout); err == nil && d > 0 {
+		return d
+	}
+	return 60 * time.Second
 }
 
 // BDS服务器配置, 支持填写多个服务器并绑定域名
@@ -238,20 +249,26 @@ func (c *Conf) Validate() error {
 	default:
 		errs = append(errs, fmt.Errorf("gateway.access.mode: invalid mode %q, expect off/blacklist/whitelist", c.Gateway.Access.Mode))
 	}
+	if c.Gateway.Access.Mode == "whitelist" && len(c.Gateway.Access.XUIDs) == 0 {
+		errs = append(errs, errors.New("gateway.access.xuids: whitelist mode with empty list rejects all players"))
+	}
 	if c.Gateway.Access.Webhook.Enable {
 		if c.Gateway.Access.Webhook.URL == "" {
 			errs = append(errs, errors.New("gateway.access.webhook.url: required when webhook is enabled"))
 		}
-		if _, err := time.ParseDuration(c.Gateway.Access.Webhook.Timeout); err != nil {
+		if d, err := time.ParseDuration(c.Gateway.Access.Webhook.Timeout); err != nil || d <= 0 {
 			errs = append(errs, fmt.Errorf("gateway.access.webhook.timeout: invalid duration %q", c.Gateway.Access.Webhook.Timeout))
 		}
 	}
 	if c.Gateway.RateLimit.Enable {
-		if _, err := time.ParseDuration(c.Gateway.RateLimit.Interval); err != nil {
+		if d, err := time.ParseDuration(c.Gateway.RateLimit.Interval); err != nil || d <= 0 {
 			errs = append(errs, fmt.Errorf("gateway.rate_limit.interval: invalid duration %q", c.Gateway.RateLimit.Interval))
 		}
 		if c.Gateway.RateLimit.MaxJoins < 1 {
 			errs = append(errs, errors.New("gateway.rate_limit.max_joins: must be >= 1"))
+		}
+		if c.Gateway.RateLimit.MaxKeys < 0 {
+			errs = append(errs, errors.New("gateway.rate_limit.max_keys: must not be negative"))
 		}
 	}
 
@@ -273,11 +290,18 @@ func (c *Conf) Validate() error {
 		}
 	}
 
+	seenDomains := make(map[string]bool)
 	for i, bds := range c.BDS {
 
 		if !bds.Enable {
 			continue
 		}
+
+		domain := strings.ToLower(strings.TrimSpace(bds.Domain))
+		if domain != "" && seenDomains[domain] {
+			errs = append(errs, fmt.Errorf("bds[%d].domain: duplicate domain %q, only the first entry takes effect", i, bds.Domain))
+		}
+		seenDomains[domain] = true
 
 		if bds.Domain == "" {
 			errs = append(errs, fmt.Errorf("bds[%d].domain: required when enabled", i))
@@ -296,11 +320,18 @@ func (c *Conf) Validate() error {
 		}
 	}
 
+	seenEntries := make(map[string]bool)
 	for i, entry := range c.Entry {
 
 		if !entry.Enable {
 			continue
 		}
+
+		entryKey := net.JoinHostPort(entry.Host, strconv.Itoa(entry.Port))
+		if seenEntries[entryKey] {
+			errs = append(errs, fmt.Errorf("entry[%d]: duplicate entry %s, heartbeat stats and session counts would collide", i, entryKey))
+		}
+		seenEntries[entryKey] = true
 
 		if entry.Host == "" {
 			errs = append(errs, fmt.Errorf("entry[%d].host: required when enabled", i))

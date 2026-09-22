@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"gopkg.in/yaml.v3"
 )
@@ -44,6 +45,7 @@ func Default() *Conf {
 			RateLimit: RateLimitConf{
 				Interval: "60s",
 				MaxJoins: 5,
+				MaxKeys:  1000,
 			},
 		},
 		Multiplexer: MultiplexerConf{
@@ -105,14 +107,35 @@ func Load(path string) (*Conf, error) {
 	return cfg, nil
 }
 
-// Save 将配置以 YAML 格式写入文件
+// Save 将配置以 YAML 格式写入文件: 先写临时文件再原子替换,
+// 防止崩溃留下截断的配置; 文件权限 0600 (含 token 等凭据)
 func Save(path string, cfg *Conf) error {
 	data, err := yaml.Marshal(cfg)
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0644); err != nil {
-		return fmt.Errorf("write config file: %w", err)
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".config-*.yml")
+	if err != nil {
+		return fmt.Errorf("create temp config: %w", err)
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return fmt.Errorf("write temp config: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return fmt.Errorf("sync temp config: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("close temp config: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("replace config file: %w", err)
 	}
 	return nil
 }

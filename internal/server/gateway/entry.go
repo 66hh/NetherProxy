@@ -38,7 +38,7 @@ type entryBalancer struct {
 
 func newEntryBalancer(store *conf.Store, table *session.Table, tracker *multiplexer.EntryTracker) *entryBalancer {
 	b := &entryBalancer{store: store, tracker: tracker, counts: make(map[string]int)}
-	table.OnRemove = append(table.OnRemove, func(s *session.Session) {
+	table.AddOnRemove(func(s *session.Session) {
 		b.release(s.Entry)
 	})
 	return b

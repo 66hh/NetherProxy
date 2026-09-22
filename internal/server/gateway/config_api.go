@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"encoding/json"
 	"net/http"
 	"time"
 
@@ -24,18 +25,30 @@ func registerConfigAPI(api *gin.RouterGroup, store *conf.Store) {
 	g.POST("/reload", handleReloadConfig(store))
 }
 
+// maskedToken 是 token 在读取接口中的脱敏占位值
+const maskedToken = "***"
+
 func handleReadConfig(store *conf.Store) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		c.JSON(http.StatusOK, store.Get())
+		// 浅拷贝后脱敏 token, 避免凭据明文出现在响应/日志中
+		cfg := *store.Get()
+		cfg.Gateway.Token = maskedToken
+		c.JSON(http.StatusOK, &cfg)
 	}
 }
 
 func handleWriteConfig(store *conf.Store) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var cfg conf.Conf
-		if err := c.ShouldBindJSON(&cfg); err != nil {
+		dec := json.NewDecoder(http.MaxBytesReader(c.Writer, c.Request.Body, 1<<20))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&cfg); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body", "details": err.Error()})
 			return
+		}
+		// 提交脱敏占位值表示不修改 token
+		if cfg.Gateway.Token == maskedToken {
+			cfg.Gateway.Token = store.Get().Gateway.Token
 		}
 		old := store.Get()
 		if err := store.Write(&cfg); err != nil {

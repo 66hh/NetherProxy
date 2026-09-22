@@ -46,8 +46,13 @@ func newJoinHandler(store *conf.Store, balancer *entryBalancer, mux *multiplexer
 	}
 }
 
-// motd 处理 GET /v1/join, 透传服务器名片
+// motd 处理 GET /v1/join, 透传服务器名片; 按客户端 IP 限流防止打爆 BDS
 func (h *joinHandler) motd(c *gin.Context) {
+	if rl := h.store.Get().Gateway.RateLimit; rl.Enable && !h.limiter.allow("ip:"+c.ClientIP(), rl) {
+		logger.Warn("motd rate limited", "client", c.ClientIP())
+		writeText(c, http.StatusTooManyRequests, "rate limited")
+		return
+	}
 	backend := h.match(c.Request.Host)
 	if backend == nil {
 		logger.Warn("no bds route for host", "host", c.Request.Host)
@@ -72,20 +77,24 @@ func (h *joinHandler) offer(c *gin.Context) {
 	}
 	logger.Debug("join offer request", "network_id", c.Param("networkID"), "host", c.Request.Host, "backend", net.JoinHostPort(backend.Host, strconv.Itoa(backend.Port)), "sdp", string(body))
 
-	// relay_only 中继模式: 隐藏客户端真实地址, 强制全部流量经代理
-	if h.store.Get().Gateway.RelayOnly {
+	// relay_only 中继模式: 隐藏客户端真实地址, 强制全部流量经代理;
+	// 该模式承诺不泄露客户端地址, 重写失败时必须拒绝而非透传
+	relayOnly := h.store.Get().Gateway.RelayOnly
+	if relayOnly {
 		rewritten, err := RewriteOffer(body)
 		if err != nil {
-			logger.Warn("rewrite offer failed, passing through", "err", err)
-		} else {
-			body = rewritten
+			logger.Error("rewrite offer failed, rejected (relay_only)", "err", err)
+			c.Data(http.StatusOK, "application/sdp", []byte("37"))
+			return
 		}
+		body = rewritten
 	}
 
 	// 验证玩家身份 (offer 中微软签发的 identity JWT), 不转发到 BDS;
 	// 拒绝时返回与 BDS 一致的数字错误码 37 (IdentityNotAllowed)。
 	// verify_identity 关闭时仅解析玩家信息用于展示, 不做验签。
 	var player PlayerInfo
+	verified := false
 	if h.store.Get().Gateway.VerifyIdentity {
 		player, err = h.verifier.verify(body)
 		if err != nil {
@@ -93,19 +102,32 @@ func (h *joinHandler) offer(c *gin.Context) {
 			c.Data(http.StatusOK, "application/sdp", []byte("37"))
 			return
 		}
+		verified = true
 	} else {
 		player = h.verifier.extractPlayer(body)
 	}
 
-	// join 频率限制 (按 XUID)
-	if rl := h.store.Get().Gateway.RateLimit; rl.Enable && !h.limiter.allow(player.XUID, rl) {
-		logger.Warn("join rate limited", "client", c.ClientIP(), "player", player.Name, "xuid", player.XUID)
-		c.Data(http.StatusTooManyRequests, "text/plain; charset=utf-8", []byte("rate limited"))
+	// join 频率限制: 已验签按 XUID, 未验签回退按客户端 IP
+	rateKey := player.XUID
+	if !verified {
+		rateKey = "ip:" + c.ClientIP()
+	}
+	if rl := h.store.Get().Gateway.RateLimit; rl.Enable && !h.limiter.allow(rateKey, rl) {
+		logger.Warn("join rate limited", "client", c.ClientIP(), "player", player.Name, "key", rateKey)
+		c.Data(http.StatusOK, "application/sdp", []byte("37"))
 		return
 	}
 
-	// XUID 黑白名单 + webhook 判定
-	if ok, reason := h.checkAccess(player, c.ClientIP()); !ok {
+	// 黑白名单与 webhook 依赖可信身份, 未验签时启用即拒绝 (fail-closed)
+	if !verified {
+		acc := h.store.Get().Gateway.Access
+		if acc.Mode == "blacklist" || acc.Mode == "whitelist" || acc.Webhook.Enable {
+			logger.Warn("access control requires verified identity, rejected",
+				"client", c.ClientIP(), "player", player.Name)
+			c.Data(http.StatusOK, "application/sdp", []byte("37"))
+			return
+		}
+	} else if ok, reason := h.checkAccess(player, c.ClientIP()); !ok {
 		logger.Warn("access denied", "client", c.ClientIP(), "player", player.Name, "xuid", player.XUID, "reason", reason)
 		c.Data(http.StatusOK, "application/sdp", []byte("37"))
 		return
@@ -131,23 +153,19 @@ func (h *joinHandler) rewriteAnswer(status int, contentType string, body []byte,
 	entry, err := h.balancer.pick()
 	if err != nil {
 		logger.Error("no available entry, passing through", "err", err)
-		return body
+		return h.passThrough(body, "")
 	}
 	key := multiplexer.EntryKey(entry)
-	passThrough := func() []byte {
-		h.balancer.release(key)
-		return body
-	}
 
 	ip, err := resolveEntryIP(entry.Host)
 	if err != nil {
 		logger.Error("resolve entry host failed, passing through", "entry", key, "err", err)
-		return passThrough()
+		return h.passThrough(body, key)
 	}
 	res, err := RewriteAnswer(body, ip, uint16(entry.Port))
 	if err != nil {
 		logger.Error("rewrite answer failed, passing through", "err", err)
-		return passThrough()
+		return h.passThrough(body, key)
 	}
 	logger.Debug("answer rewritten", "ufrag", res.Ufrag, "backend", res.BackendAddr,
 		"original", string(body), "rewritten", string(res.Body))
@@ -161,10 +179,23 @@ func (h *joinHandler) rewriteAnswer(status int, contentType string, body []byte,
 	}
 	if err := h.mux.CreateSession(info); err != nil {
 		logger.Error("create session failed, passing through", "ufrag", res.Ufrag, "backend", res.BackendAddr, "err", err)
-		return passThrough()
+		return h.passThrough(body, key)
 	}
 	logger.Info("session signaled", "ufrag", res.Ufrag, "player", player.Name, "xuid", player.XUID, "backend", res.BackendAddr, "entry", key)
 	return res.Body
+}
+
+// passThrough 处理重写/建会话失败的回退: 释放线路计数;
+// relay_only 模式承诺流量必经代理, 返回 nil 表示拒绝本次 join,
+// 普通模式透传原始 answer 保留 BDS 原始行为便于排障
+func (h *joinHandler) passThrough(body []byte, entryKey string) []byte {
+	if entryKey != "" {
+		h.balancer.release(entryKey)
+	}
+	if h.store.Get().Gateway.RelayOnly {
+		return nil
+	}
+	return body
 }
 
 // match 按请求 Host 匹配 BDS 配置, 仅匹配启用的条目, 列表中靠前的优先
@@ -214,10 +245,20 @@ func (h *joinHandler) forward(c *gin.Context, backend *conf.BDSConf, body []byte
 		writeText(c, http.StatusBadGateway, "failed to read backend response")
 		return
 	}
+	if len(respBody) > joinBodyLimit {
+		logger.Warn("backend response too large", "backend", target.Host, "limit", joinBodyLimit)
+		writeText(c, http.StatusBadGateway, "backend response too large")
+		return
+	}
 	logger.Debug("bds response", "method", c.Request.Method, "backend", target.Host,
 		"status", resp.StatusCode, "content_type", resp.Header.Get("Content-Type"), "body", string(respBody))
 	if rewriteResp != nil {
 		respBody = rewriteResp(resp.StatusCode, resp.Header.Get("Content-Type"), respBody)
+		if respBody == nil {
+			// relay_only 等模式下重写失败拒绝透传
+			writeText(c, http.StatusBadGateway, "answer rejected")
+			return
+		}
 	}
 
 	copyHeaders(c.Writer.Header(), resp.Header)

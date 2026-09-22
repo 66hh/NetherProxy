@@ -70,6 +70,9 @@ func RewriteAnswer(body []byte, advertiseIP netip.Addr, publicPort uint16) (*Rew
 	if ufrag == "" {
 		return nil, errors.New("missing ice-ufrag in answer")
 	}
+	if pwd == "" {
+		return nil, errors.New("missing ice-pwd in answer")
+	}
 	if !haveBackend {
 		if !haveLoopback {
 			return nil, errors.New("no usable UDP candidate in answer")

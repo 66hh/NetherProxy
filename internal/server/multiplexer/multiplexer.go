@@ -25,6 +25,8 @@ import (
 	"runtime"
 	"strconv"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"NetherProxy/internal/conf"
 	"NetherProxy/internal/logger"
@@ -51,9 +53,10 @@ type Multiplexer struct {
 
 	public *net.UDPConn // 公网单端口 socket
 
-	ctx    context.Context
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	closing atomic.Bool
+	ctx     context.Context
+	cancel  context.CancelFunc
+	wg      sync.WaitGroup
 }
 
 // New 创建数据面, 尚未开始监听。
@@ -111,6 +114,7 @@ func (m *Multiplexer) Table() *session.Table {
 
 // Close 关闭公网 socket 并停止全部循环。
 func (m *Multiplexer) Close() error {
+	m.closing.Store(true)
 	m.cancel()
 	err := m.public.Close()
 	m.wg.Wait()
@@ -120,12 +124,18 @@ func (m *Multiplexer) Close() error {
 // CreateSession 由信令层在拦截 answer 后调用：
 // 建立通往 BDS 的内部 socket、注册会话、启动回包循环。
 func (m *Multiplexer) CreateSession(info session.SessionInfo) error {
+	if m.closing.Load() {
+		return errors.New("multiplexer is closing")
+	}
 	raddr := net.UDPAddrFromAddrPort(info.BackendAddr)
 	backend, err := net.DialUDP("udp", nil, raddr)
 	if err != nil {
 		return fmt.Errorf("dial backend: %w", err)
 	}
 	sess := m.table.Add(info, backend)
+	if sess == nil {
+		return errors.New("session table closed")
+	}
 	sessionActive.Inc()
 	m.wg.Add(1)
 	go m.backendLoop(sess)
@@ -176,11 +186,16 @@ func (m *Multiplexer) handle(pkt []byte, src netip.AddrPort) {
 			return
 		}
 		// 安全校验: 携带 MESSAGE-INTEGRITY 的 STUN 必须通过 HMAC 校验 (密钥 = ice-pwd)
-		if !verifySTUNIntegrity(pkt, sess.Pwd) {
+		ok, verified := verifySTUNIntegrity(pkt, sess.Pwd)
+		if !ok {
 			logger.Warn("STUN integrity check failed, dropped", "ufrag", ufrag, "src", src)
 			return
 		}
-		m.table.BindClient(sess, src)
+		// 只有通过完整性校验的包才允许学习/改绑客户端地址,
+		// 未携带 MI 的包 (保活 indication 等) 只转发不改绑, 防止伪造地址劫持回包
+		if verified {
+			m.table.BindClient(sess, src)
+		}
 		sess.AddRx(len(pkt))
 		if _, err := sess.Backend().Write(pkt); err != nil {
 			logger.Debug("forward STUN to backend failed", "ufrag", ufrag, "err", err)
@@ -214,7 +229,14 @@ func (m *Multiplexer) backendLoop(sess *session.Session) {
 	for {
 		n, err := sess.Backend().Read(buf)
 		if err != nil {
-			return // 会话已关闭
+			// 仅会话关闭 (内部 socket 被关闭) 才退出; 瞬时错误
+			// (如 Windows 收到 ICMP 不可达回执) 记录后继续, 避免回包通道静默死亡
+			if errors.Is(err, net.ErrClosed) || sess.State() == session.StateClosed {
+				return
+			}
+			logger.Debug("backend read failed", "ufrag", sess.Ufrag, "err", err)
+			time.Sleep(10 * time.Millisecond)
+			continue
 		}
 		client, ok := sess.Client()
 		if !ok {
@@ -263,15 +285,19 @@ func parseSTUNServerUfrag(b []byte) (string, bool) {
 // verifySTUNIntegrity 校验 STUN 消息的 MESSAGE-INTEGRITY (RFC 5389, HMAC-SHA1,
 // 密钥 = 服务端 ice-pwd)。
 //
-// pwd 为空 (信令未提供凭据) 或消息未携带 MESSAGE-INTEGRITY 属性 (如保活
-// indication) 时放行; 携带了属性但校验失败才判定为伪造。
-func verifySTUNIntegrity(b []byte, pwd string) bool {
+// 返回值: ok 表示是否放行 (携带了属性但校验失败才判定为伪造),
+// verified 表示是否实际通过了 MI 校验 (pwd 为空或消息未携带 MI 属性时为 false,
+// 调用方不得据此改绑客户端地址)。
+func verifySTUNIntegrity(b []byte, pwd string) (ok bool, verified bool) {
 	if pwd == "" {
-		return true
+		return true, false
+	}
+	if len(b) < 20 {
+		return false, false
 	}
 	msgLen := int(binary.BigEndian.Uint16(b[2:4]))
-	if len(b) < 20 || 20+msgLen > len(b) {
-		return false
+	if 20+msgLen > len(b) {
+		return false, false
 	}
 	attrs := b[20 : 20+msgLen]
 	off := 0
@@ -279,11 +305,11 @@ func verifySTUNIntegrity(b []byte, pwd string) bool {
 		typ := binary.BigEndian.Uint16(attrs[off : off+2])
 		l := int(binary.BigEndian.Uint16(attrs[off+2 : off+4]))
 		if len(attrs)-off < 4+l {
-			return false
+			return false, false
 		}
 		if typ == 0x0008 { // MESSAGE-INTEGRITY
 			if l != sha1.Size {
-				return false
+				return false, false
 			}
 			// RFC 5389 §15.4: 计算 HMAC 时 length 字段取到 MESSAGE-INTEGRITY
 			// 属性结束为止, 消息内容为该属性之前的全部字节。
@@ -293,12 +319,15 @@ func verifySTUNIntegrity(b []byte, pwd string) bool {
 			mac := hmac.New(sha1.New, []byte(pwd))
 			mac.Write(hdr[:])
 			mac.Write(attrs[:off])
-			return hmac.Equal(mac.Sum(nil), attrs[off+4:off+4+l])
+			if !hmac.Equal(mac.Sum(nil), attrs[off+4:off+4+l]) {
+				return false, false
+			}
+			return true, true
 		}
 		off += 4 + (l+3)&^3
 	}
-	// 未携带 MESSAGE-INTEGRITY: 放行
-	return true
+	// 未携带 MESSAGE-INTEGRITY: 放行但不视为已验证
+	return true, false
 }
 
 // EntryKey 返回线路的标识 (host:port)。

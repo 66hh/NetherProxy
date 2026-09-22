@@ -61,6 +61,7 @@ func main() {
 	mux := multiplexer.New(store, table, tracker)
 	if err := mux.Start(); err != nil {
 		logger.Error("multiplexer start failed", "err", err)
+		tracker.Close()
 		os.Exit(1)
 	}
 
@@ -69,18 +70,28 @@ func main() {
 
 	gw := gateway.New(store, mux, tracker)
 
+	// gateway 启动错误经 channel 上报, 统一走优雅关闭路径
+	errCh := make(chan error, 1)
 	go func() {
-		if err := gw.Start(); err != nil {
-			logger.Error("gateway stopped with error", "err", err)
-			os.Exit(1)
-		}
+		errCh <- gw.Start()
 	}()
 
-	// 等待退出信号并优雅关闭
-	quit := make(chan os.Signal, 1)
+	// 等待退出信号; 第二次信号强制退出
+	quit := make(chan os.Signal, 2)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	sig := <-quit
-	logger.Info("shutdown signal received", "signal", sig.String())
+	select {
+	case sig := <-quit:
+		logger.Info("shutdown signal received", "signal", sig.String())
+	case err := <-errCh:
+		if err != nil {
+			logger.Error("gateway stopped with error", "err", err)
+		}
+	}
+	go func() {
+		<-quit
+		logger.Warn("second signal received, forcing exit")
+		os.Exit(1)
+	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -89,12 +100,13 @@ func main() {
 		logger.Error("gateway shutdown error", "err", err)
 	}
 
-	// 逆序关闭: 先停探测与转发, 再回收会话, 最后落盘统计
+	// 逆序关闭: 先停探测, 再回收会话 (关闭 backend socket 使 backendLoop 退出),
+	// 然后停数据面, 最后落盘统计
 	heartbeat.Close()
+	table.Close()
 	if err := mux.Close(); err != nil {
 		logger.Error("multiplexer close error", "err", err)
 	}
-	table.Close()
 	tracker.Close()
 
 	logger.Info("NetherProxy stopped")

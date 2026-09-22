@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/netip"
 	"os"
@@ -321,11 +322,20 @@ func (h *Heartbeat) reconcileLoop(ctx context.Context) {
 // reconcile 增删 worker 使探测集合与配置一致, 配置变更的 worker 原地重启
 func (h *Heartbeat) reconcile(ctx context.Context) {
 	want := make(map[string]conf.EntryConf)
+	exists := make(map[string]bool)
 	cfg := h.store.Get()
 	for i := range cfg.Entry {
 		e := &cfg.Entry[i]
+		exists[EntryKey(e)] = true
 		if e.Enable && e.Heartbeat.Enable {
 			want[EntryKey(e)] = *e
+		}
+	}
+
+	// 清理已从配置中删除的线路的历史统计与指标序列
+	for key := range h.tracker.Snapshot() {
+		if !exists[key] {
+			h.tracker.Remove(key)
 		}
 	}
 
@@ -364,10 +374,14 @@ type hbWorker struct {
 	entry   conf.EntryConf
 	tracker *EntryTracker
 	cancel  context.CancelFunc
+	done    chan struct{}
+
+	mu   sync.Mutex
+	conn *net.UDPConn // 进行中的 probe 使用的连接, stop 时关闭以打断阻塞的 Read
 }
 
 func newHBWorker(key string, entry conf.EntryConf, tracker *EntryTracker) *hbWorker {
-	return &hbWorker{key: key, entry: entry, tracker: tracker}
+	return &hbWorker{key: key, entry: entry, tracker: tracker, done: make(chan struct{})}
 }
 
 func (w *hbWorker) start(ctx context.Context) {
@@ -376,42 +390,54 @@ func (w *hbWorker) start(ctx context.Context) {
 	go w.run(wctx)
 }
 
+// stop 停止 worker 并等待进行中的探测退出
 func (w *hbWorker) stop() {
 	w.cancel()
+	w.mu.Lock()
+	if w.conn != nil {
+		_ = w.conn.Close()
+	}
+	w.mu.Unlock()
+	<-w.done
 }
 
 func (w *hbWorker) run(ctx context.Context) {
-	raddr, err := net.ResolveUDPAddr("udp", w.key)
-	if err != nil {
-		logger.Error("heartbeat resolve entry failed", "entry", w.key, "err", err)
-		return
-	}
-	conn, err := net.DialUDP("udp", nil, raddr)
-	if err != nil {
-		logger.Error("heartbeat dial entry failed", "entry", w.key, "err", err)
-		return
-	}
-	defer conn.Close()
-
+	defer close(w.done)
 	hb := w.entry.Heartbeat
 	interval := hb.IntervalDuration()
-	timeout := hb.TimeoutDuration()
-
-	w.probe(conn, timeout, hb)
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
 	for {
+		w.probeOnce(hb)
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
-			w.probe(conn, timeout, hb)
+		case <-time.After(interval):
 		}
 	}
 }
 
-// probe 发送一次 NPING 并在超时内等待匹配的 NPONG
-func (w *hbWorker) probe(conn *net.UDPConn, timeout time.Duration, hb conf.HeartbeatConf) {
+// probeOnce 执行一次探测: 每次新建连接, resolve/dial 失败也计入统计,
+// 下一轮 tick 自动重试
+func (w *hbWorker) probeOnce(hb conf.HeartbeatConf) {
+	raddr, err := net.ResolveUDPAddr("udp", w.key)
+	if err != nil {
+		w.tracker.Record(w.key, 0, fmt.Errorf("resolve entry: %w", err), hb.AutoOffline, hb.Retries)
+		return
+	}
+	conn, err := net.DialUDP("udp", nil, raddr)
+	if err != nil {
+		w.tracker.Record(w.key, 0, fmt.Errorf("dial entry: %w", err), hb.AutoOffline, hb.Retries)
+		return
+	}
+	w.mu.Lock()
+	w.conn = conn
+	w.mu.Unlock()
+	defer func() {
+		w.mu.Lock()
+		w.conn = nil
+		w.mu.Unlock()
+		_ = conn.Close()
+	}()
+
 	pkt := make([]byte, packetSize)
 	copy(pkt, pingMagic)
 	if _, err := rand.Read(pkt[len(pingMagic):]); err != nil {
@@ -419,8 +445,9 @@ func (w *hbWorker) probe(conn *net.UDPConn, timeout time.Duration, hb conf.Heart
 		return
 	}
 
+	timeout := hb.TimeoutDuration()
 	start := time.Now()
-	err := conn.SetReadDeadline(start.Add(timeout))
+	err = conn.SetReadDeadline(start.Add(timeout))
 	if err == nil {
 		_, err = conn.Write(pkt)
 	}

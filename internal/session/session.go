@@ -147,15 +147,21 @@ func (s *Session) LearnClient(addr netip.AddrPort) (changed bool) {
 	return changed
 }
 
-// Touch 记录一次非 STUN 数据面活动（DTLS/SCTP），把会话推进到 Active。
+// Touch 记录一次非 STUN 数据面活动（DTLS/SCTP）：刷新活动时间并把会话
+// 推进到 Active（含 Idle 回迁）; 已学习客户端地址时同步续期 5-tuple 软状态,
+// 防止活跃会话因长时间无 STUN 保活被误判过期。
 func (s *Session) Touch() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
 		return
 	}
-	s.lastActivity = time.Now()
-	if s.state < StateActive {
+	now := time.Now()
+	s.lastActivity = now
+	if s.hasClient {
+		s.lastTuple = now
+	}
+	if s.state != StateActive {
 		s.state = StateActive
 	}
 }
@@ -215,11 +221,13 @@ type Table struct {
 	byUfrag  map[string]*Session
 	byClient map[netip.AddrPort]*Session
 
-	// OnRemove 在会话从表中移除后依次调用 (锁外执行), 用于释放关联资源如线路计数。
-	OnRemove []func(*Session)
+	// onRemove 在会话从表中移除后依次调用 (锁外执行), 用于释放关联资源如线路计数。
+	// 仅在启动期经 AddOnRemove 注册。
+	onRemove []func(*Session)
 
 	reapInterval time.Duration
 	closed       chan struct{}
+	closedFlag   atomic.Bool
 	once         sync.Once
 }
 
@@ -249,6 +257,11 @@ type SessionInfo struct {
 // Add 注册一个已完成信令交换的新会话。backend 是通往 BackendAddr 的
 // 已连接 UDP socket，所有权移交给会话。相同 ufrag 的既有会话会被替换。
 func (t *Table) Add(info SessionInfo, backend *net.UDPConn) *Session {
+	if t.closedFlag.Load() {
+		_ = backend.Close()
+		logger.Warn("session table closed, rejecting add", "ufrag", info.Ufrag)
+		return nil
+	}
 	s := &Session{
 		Ufrag:        info.Ufrag,
 		Pwd:          info.Pwd,
@@ -334,10 +347,18 @@ func (t *Table) BindClient(s *Session, addr netip.AddrPort) {
 		return
 	}
 	t.mu.Lock()
+	if t.byUfrag[s.Ufrag] != s {
+		// 会话已被移除/替换, 不回插反向索引
+		t.mu.Unlock()
+		return
+	}
 	if ok {
 		if cur := t.byClient[old]; cur == s {
 			delete(t.byClient, old)
 		}
+	}
+	if prev := t.byClient[addr]; prev != nil && prev != s {
+		logger.Warn("client address taken over by new session", "addr", addr, "old_ufrag", prev.Ufrag, "new_ufrag", s.Ufrag)
 	}
 	t.byClient[addr] = s
 	t.mu.Unlock()
@@ -367,6 +388,7 @@ func (t *Table) Range(fn func(*Session)) {
 // Close 停止后台回收并关闭全部会话。
 func (t *Table) Close() {
 	t.once.Do(func() {
+		t.closedFlag.Store(true)
 		close(t.closed)
 		t.mu.Lock()
 		sessions := make([]*Session, 0, len(t.byUfrag))
@@ -392,9 +414,19 @@ func (t *Table) removeLocked(s *Session) {
 }
 
 func (t *Table) notifyRemove(s *Session) {
-	for _, fn := range t.OnRemove {
+	t.mu.RLock()
+	fns := t.onRemove
+	t.mu.RUnlock()
+	for _, fn := range fns {
 		fn(s)
 	}
+}
+
+// AddOnRemove 注册会话移除回调, 仅在启动期调用
+func (t *Table) AddOnRemove(fn func(*Session)) {
+	t.mu.Lock()
+	t.onRemove = append(t.onRemove, fn)
+	t.mu.Unlock()
 }
 
 // reaper 周期性扫描会话表，按状态机执行超时转移与回收。

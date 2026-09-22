@@ -55,7 +55,12 @@ type Gateway struct {
 func New(store *conf.Store, mux *multiplexer.Multiplexer, tracker *multiplexer.EntryTracker) *Gateway {
 	cfg := store.Get().Gateway
 	router := gin.New()
+	// 不信任任何代理头 (X-Forwarded-For), ClientIP 直接取对端地址
+	_ = router.SetTrustedProxies(nil)
 	router.Use(gin.Recovery(), accessLog())
+	if cfg.Metrics.Enable {
+		router.Use(collectMetrics())
+	}
 
 	// NetherNet 信令端点, 客户端硬编码路径, 必须挂在根路径
 	balancer := newEntryBalancer(store, mux.Table(), tracker)
@@ -67,7 +72,6 @@ func New(store *conf.Store, mux *multiplexer.Multiplexer, tracker *multiplexer.E
 	api := router.Group("/api", apiAuth(store))
 
 	if cfg.Metrics.Enable {
-		router.Use(collectMetrics())
 		api.GET("/metrics", gin.WrapH(promhttp.Handler()))
 	}
 
@@ -88,9 +92,12 @@ func New(store *conf.Store, mux *multiplexer.Multiplexer, tracker *multiplexer.E
 	return &Gateway{
 		store: store,
 		srv: &http.Server{
-			Addr:              net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port)),
-			Handler:           router,
+			Addr:    net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port)),
+			Handler: router,
+			// BDS 协商最长约 15s, 读超时留足余量
 			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       30 * time.Second,
+			IdleTimeout:       60 * time.Second,
 			TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS12},
 		},
 	}

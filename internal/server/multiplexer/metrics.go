@@ -31,7 +31,7 @@ func init() {
 // registerSessionMetrics 注册会话指标的同步循环与清理钩子
 func (m *Multiplexer) registerSessionMetrics() {
 	// 会话移除时清理对应的指标序列
-	m.table.OnRemove = append(m.table.OnRemove, func(s *session.Session) {
+	m.table.AddOnRemove(func(s *session.Session) {
 		sessionActive.Dec()
 		sessionTrafficBytes.DeleteLabelValues(s.Player, s.Ufrag, "rx")
 		sessionTrafficBytes.DeleteLabelValues(s.Player, s.Ufrag, "tx")

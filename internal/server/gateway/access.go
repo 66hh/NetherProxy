@@ -104,32 +104,33 @@ func newRateLimiter() *rateLimiter {
 	return &rateLimiter{hits: make(map[string]*rateHit)}
 }
 
-// allow 判定该 XUID 本次 join 是否未超限额, 窗口与上限每次从配置读取
-func (r *rateLimiter) allow(xuid string, cfg conf.RateLimitConf) bool {
+// allow 判定该 key 本次 join 是否未超限额, 窗口与上限每次从配置读取
+func (r *rateLimiter) allow(key string, cfg conf.RateLimitConf) bool {
 	interval, err := time.ParseDuration(cfg.Interval)
 	if err != nil || interval <= 0 {
 		interval = time.Minute
 	}
 	maxJoins := max(cfg.MaxJoins, 1)
+	maxKeys := cfg.MaxKeys
+	if maxKeys <= 0 {
+		maxKeys = 1000
+	}
 
 	now := time.Now()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	// 顺手清理过期条目, 防止 map 无限增长
-	for k, h := range r.hits {
-		if now.Sub(h.windowStart) >= interval*2 {
-			delete(r.hits, k)
-		}
+	if len(r.hits) >= maxKeys {
+		clear(r.hits)
 	}
 
-	h := r.hits[xuid]
+	h := r.hits[key]
 	if h == nil || now.Sub(h.windowStart) >= interval {
-		r.hits[xuid] = &rateHit{windowStart: now, count: 1}
+		r.hits[key] = &rateHit{windowStart: now, count: 1}
 		return true
 	}
 	if h.count >= maxJoins {
-		logger.Debug("join rate limited", "xuid", xuid, "count", h.count, "window", interval)
+		logger.Debug("join rate limited", "key", key, "count", h.count, "window", interval)
 		return false
 	}
 	h.count++

@@ -32,6 +32,17 @@ func Default() *Conf {
 			Host:  "0.0.0.0",
 			Port:  19130,
 			Token: randomHex(16),
+			Access: AccessConf{
+				Mode:  "off",
+				XUIDs: []string{},
+				Webhook: WebhookConf{
+					Timeout: "3s",
+				},
+			},
+			RateLimit: RateLimitConf{
+				Interval: "60s",
+				MaxJoins: 5,
+			},
 		},
 		Multiplexer: MultiplexerConf{
 			Host: "0.0.0.0",

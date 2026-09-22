@@ -84,6 +84,7 @@ func (m *Multiplexer) Start() error {
 		logger.Warn("set udp write buffer failed", "err", err)
 	}
 	m.public = conn
+	m.registerSessionMetrics()
 
 	readers := min(runtime.NumCPU(), maxReaders)
 	for i := 0; i < readers; i++ {
@@ -118,13 +119,14 @@ func (m *Multiplexer) Close() error {
 
 // CreateSession 由信令层在拦截 answer 后调用：
 // 建立通往 BDS 的内部 socket、注册会话、启动回包循环。
-func (m *Multiplexer) CreateSession(ufrag, pwd string, backendAddr netip.AddrPort, entry string) error {
-	raddr := net.UDPAddrFromAddrPort(backendAddr)
+func (m *Multiplexer) CreateSession(info session.SessionInfo) error {
+	raddr := net.UDPAddrFromAddrPort(info.BackendAddr)
 	backend, err := net.DialUDP("udp", nil, raddr)
 	if err != nil {
 		return fmt.Errorf("dial backend: %w", err)
 	}
-	sess := m.table.Add(ufrag, pwd, backendAddr, backend, entry)
+	sess := m.table.Add(info, backend)
+	sessionActive.Inc()
 	m.wg.Add(1)
 	go m.backendLoop(sess)
 	return nil
@@ -179,6 +181,7 @@ func (m *Multiplexer) handle(pkt []byte, src netip.AddrPort) {
 			return
 		}
 		m.table.BindClient(sess, src)
+		sess.AddRx(len(pkt))
 		if _, err := sess.Backend().Write(pkt); err != nil {
 			logger.Debug("forward STUN to backend failed", "ufrag", ufrag, "err", err)
 		}
@@ -192,6 +195,7 @@ func (m *Multiplexer) handle(pkt []byte, src netip.AddrPort) {
 		return
 	}
 	sess.Touch()
+	sess.AddRx(len(pkt))
 	if _, err := sess.Backend().Write(pkt); err != nil {
 		logger.Debug("forward data to backend failed", "client", src, "err", err)
 	}
@@ -216,6 +220,7 @@ func (m *Multiplexer) backendLoop(sess *session.Session) {
 		if !ok {
 			continue // 客户端地址尚未学习，无法回包
 		}
+		sess.AddTx(n)
 		if _, err := m.public.WriteToUDPAddrPort(buf[:n], client); err != nil {
 			logger.Debug("forward to client failed", "ufrag", sess.Ufrag, "err", err)
 		}

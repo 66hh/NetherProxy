@@ -80,6 +80,11 @@ func New(store *conf.Store, mux *multiplexer.Multiplexer, tracker *multiplexer.E
 	// 线路状态与心跳统计
 	api.GET("/entry", tokenAuth(store), handleEntryStatus(store, tracker, balancer))
 
+	// 会话列表 (含玩家信息与流量统计)
+	api.GET("/session", tokenAuth(store), handleSessionList(mux.Table()))
+	// 掐断指定会话
+	api.DELETE("/session/:ufrag", tokenAuth(store), handleCloseSession(mux.Table()))
+
 	registerConfigAPI(api, store)
 
 	return &Gateway{

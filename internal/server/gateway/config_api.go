@@ -2,12 +2,14 @@ package gateway
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"NetherProxy/internal/conf"
 	"NetherProxy/internal/logger"
 	"NetherProxy/internal/server/multiplexer"
+	"NetherProxy/internal/session"
 )
 
 // registerConfigAPI 注册配置管理路由, 全部强制 Bearer 认证
@@ -83,6 +85,43 @@ func handleEntryStatus(store *conf.Store, tracker *multiplexer.EntryTracker, bal
 			entries = append(entries, entry)
 		}
 		c.JSON(http.StatusOK, gin.H{"entries": entries})
+	}
+}
+
+// handleSessionList 返回当前会话列表 (含玩家名/状态/流量)
+func handleSessionList(table *session.Table) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		sessions := make([]gin.H, 0)
+		table.Range(func(s *session.Session) {
+			rx, tx := s.Traffic()
+			client, _ := s.Client()
+			sessions = append(sessions, gin.H{
+				"ufrag":       s.Ufrag,
+				"player":      s.Player,
+				"xuid":        s.XUID,
+				"backend":     s.BackendAddr.String(),
+				"entry":       s.Entry,
+				"state":       s.State().String(),
+				"client":      client.String(),
+				"rx_bytes":    rx,
+				"tx_bytes":    tx,
+				"age_seconds": int(time.Since(s.Created()).Seconds()),
+			})
+		})
+		c.JSON(http.StatusOK, gin.H{"sessions": sessions})
+	}
+}
+
+// handleCloseSession 掐断指定会话
+func handleCloseSession(table *session.Table) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ufrag := c.Param("ufrag")
+		if !table.RemoveByUfrag(ufrag) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "session not found"})
+			return
+		}
+		logger.Info("session closed via api", "ufrag", ufrag, "client", c.ClientIP())
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	}
 }
 

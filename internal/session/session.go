@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"NetherProxy/internal/logger"
@@ -73,12 +74,20 @@ type Session struct {
 	Ufrag string
 	// Pwd 是服务端 answer 中的 ice-pwd, 用于校验客户端 STUN 包的 MESSAGE-INTEGRITY。
 	Pwd string
+	// Player 是 offer 中经验证的玩家名 (identity xname)。
+	Player string
+	// XUID 是玩家的 Xbox 用户 ID (identity xid)。
+	XUID string
 	// BackendAddr 是 BDS 为该连接分配的 UDP 地址（answer 中的 candidate）。
 	BackendAddr netip.AddrPort
 	// Entry 是分配给该会话的公网线路标识 (host:port)。
 	Entry string
 
 	backend *net.UDPConn // 通往 BackendAddr 的内部 socket
+
+	// 流量统计, 原子计数
+	rxBytes atomic.Uint64 // 客户端 -> BDS
+	txBytes atomic.Uint64 // BDS -> 客户端
 
 	mu           sync.RWMutex
 	state        State
@@ -88,6 +97,26 @@ type Session struct {
 	lastActivity time.Time // 最近一次数据面活动
 	lastTuple    time.Time // 客户端地址最近一次被（重新）学习的时间
 	closed       bool
+}
+
+// AddRx 统计客户端 -> BDS 方向的字节数。
+func (s *Session) AddRx(n int) {
+	s.rxBytes.Add(uint64(n))
+}
+
+// AddTx 统计 BDS -> 客户端方向的字节数。
+func (s *Session) AddTx(n int) {
+	s.txBytes.Add(uint64(n))
+}
+
+// Traffic 返回双向流量字节数 (rx: 客户端->BDS, tx: BDS->客户端)。
+func (s *Session) Traffic() (rx, tx uint64) {
+	return s.rxBytes.Load(), s.txBytes.Load()
+}
+
+// Created 返回会话创建时间。
+func (s *Session) Created() time.Time {
+	return s.created
 }
 
 // Backend 返回通往 BDS 的内部 socket。会话关闭后写入会失败。
@@ -194,8 +223,8 @@ type Table struct {
 	byUfrag  map[string]*Session
 	byClient map[netip.AddrPort]*Session
 
-	// OnRemove 在会话从表中移除后调用 (锁外执行), 用于释放关联资源如线路计数。
-	OnRemove func(*Session)
+	// OnRemove 在会话从表中移除后依次调用 (锁外执行), 用于释放关联资源如线路计数。
+	OnRemove []func(*Session)
 
 	reapInterval time.Duration
 	closed       chan struct{}
@@ -214,34 +243,62 @@ func NewTable() *Table {
 	return t
 }
 
+// SessionInfo 是创建会话所需的信息
+type SessionInfo struct {
+	Ufrag       string         // 服务端 ice-ufrag (路由键)
+	Pwd         string         // 服务端 ice-pwd (STUN 完整性校验密钥)
+	Player      string         // 玩家名
+	XUID        string         // Xbox 用户 ID
+	BackendAddr netip.AddrPort // BDS 分配的 UDP 地址
+	Entry       string         // 分配的公网线路 (host:port)
+}
+
 // Add 注册一个已完成信令交换的新会话。backend 是通往 BackendAddr 的
 // 已连接 UDP socket，所有权移交给会话。相同 ufrag 的既有会话会被替换。
-func (t *Table) Add(ufrag, pwd string, backendAddr netip.AddrPort, backend *net.UDPConn, entry string) *Session {
+func (t *Table) Add(info SessionInfo, backend *net.UDPConn) *Session {
 	s := &Session{
-		Ufrag:        ufrag,
-		Pwd:          pwd,
-		BackendAddr:  backendAddr,
-		Entry:        entry,
+		Ufrag:        info.Ufrag,
+		Pwd:          info.Pwd,
+		Player:       info.Player,
+		XUID:         info.XUID,
+		BackendAddr:  info.BackendAddr,
+		Entry:        info.Entry,
 		backend:      backend,
 		state:        StateSignaled,
 		created:      time.Now(),
 		lastActivity: time.Now(),
 	}
 	t.mu.Lock()
-	old := t.byUfrag[ufrag]
+	old := t.byUfrag[info.Ufrag]
 	if old != nil {
 		t.removeLocked(old)
 	}
-	t.byUfrag[ufrag] = s
+	t.byUfrag[info.Ufrag] = s
 	t.mu.Unlock()
 
 	if old != nil {
-		logger.Warn("replacing session with duplicate ufrag", "ufrag", ufrag)
+		logger.Warn("replacing session with duplicate ufrag", "ufrag", info.Ufrag)
 		old.close()
 		t.notifyRemove(old)
 	}
-	logger.Debug("session created", "ufrag", ufrag, "backend", backendAddr, "entry", entry)
+	logger.Debug("session created", "ufrag", info.Ufrag, "player", info.Player, "backend", info.BackendAddr, "entry", info.Entry)
 	return s
+}
+
+// RemoveByUfrag 移除并关闭指定会话 (API 掐断), 不存在返回 false
+func (t *Table) RemoveByUfrag(ufrag string) bool {
+	t.mu.Lock()
+	s := t.byUfrag[ufrag]
+	if s != nil {
+		t.removeLocked(s)
+	}
+	t.mu.Unlock()
+	if s == nil {
+		return false
+	}
+	s.close()
+	t.notifyRemove(s)
+	return true
 }
 
 // ByUfrag 按服务端 ice-ufrag 查找会话；不存在或已关闭时返回 nil。
@@ -301,6 +358,19 @@ func (t *Table) Len() int {
 	return len(t.byUfrag)
 }
 
+// Range 遍历全部活跃会话, fn 不得修改会话表。
+func (t *Table) Range(fn func(*Session)) {
+	t.mu.RLock()
+	sessions := make([]*Session, 0, len(t.byUfrag))
+	for _, s := range t.byUfrag {
+		sessions = append(sessions, s)
+	}
+	t.mu.RUnlock()
+	for _, s := range sessions {
+		fn(s)
+	}
+}
+
 // Close 停止后台回收并关闭全部会话。
 func (t *Table) Close() {
 	t.once.Do(func() {
@@ -329,8 +399,8 @@ func (t *Table) removeLocked(s *Session) {
 }
 
 func (t *Table) notifyRemove(s *Session) {
-	if t.OnRemove != nil {
-		t.OnRemove(s)
+	for _, fn := range t.OnRemove {
+		fn(s)
 	}
 }
 

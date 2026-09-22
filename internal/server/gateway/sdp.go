@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"errors"
+	"fmt"
 	"net/netip"
 	"strconv"
 	"strings"
@@ -151,6 +152,52 @@ func parseCandidateBackend(line string) (netip.AddrPort, bool) {
 		return netip.AddrPort{}, false
 	}
 	return netip.AddrPortFrom(ip, uint16(port)), true
+}
+
+// RewriteOffer 重写 SDP offer（relay_only 中继模式）：
+// 删除客户端的全部 candidate，替换为一条不可达占位地址（192.0.2.1:9，TEST-NET-1）。
+//
+// 用途：
+//   - 隐藏客户端真实地址：BDS 无法从 offer 中获取玩家 IP
+//   - 同网段部署时防止 BDS 对客户端 candidate 反向建连旁路代理
+//
+// 替换后 BDS 无法主动出击，只能等待客户端 check 经代理到达，
+// 通过 ICE peer-reflexive 机制建立连接，全部流量必经代理。
+// 公网部署无需开启：公网客户端的私有地址对 BDS 天然不可达。
+func RewriteOffer(body []byte) ([]byte, error) {
+	text := string(body)
+	crlf := strings.Contains(text, "\r\n")
+	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
+
+	var ufrag string
+	for _, line := range lines {
+		if v, ok := strings.CutPrefix(line, "a=ice-ufrag:"); ok {
+			ufrag = strings.TrimSpace(v)
+		}
+	}
+	if ufrag == "" {
+		return nil, errors.New("missing ice-ufrag in offer")
+	}
+
+	out := make([]string, 0, len(lines)+1)
+	replaced := false
+	for _, line := range lines {
+		if strings.HasPrefix(line, "a=candidate:") {
+			// 在第一条 candidate 的位置插入占位，其余删除。
+			if !replaced {
+				out = append(out, fmt.Sprintf("a=candidate:1 1 udp 2122260223 192.0.2.1 9 typ host generation 0 ufrag %s network-id 1 network-cost 0", ufrag))
+				replaced = true
+			}
+			continue
+		}
+		out = append(out, line)
+	}
+
+	sep := "\n"
+	if crlf {
+		sep = "\r\n"
+	}
+	return []byte(strings.Join(out, sep)), nil
 }
 
 // rewriteCandidateAddr 以模板 candidate 行为基础, 仅替换 IP 与端口字段

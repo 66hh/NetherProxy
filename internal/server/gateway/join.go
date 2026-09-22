@@ -15,6 +15,7 @@ import (
 	"NetherProxy/internal/conf"
 	"NetherProxy/internal/logger"
 	"NetherProxy/internal/server/multiplexer"
+	"NetherProxy/internal/session"
 )
 
 // joinBodyLimit 是信令请求的 body 上限, 与原版一致 1 MiB
@@ -26,6 +27,8 @@ type joinHandler struct {
 	store    *conf.Store
 	balancer *entryBalancer
 	mux      *multiplexer.Multiplexer
+	verifier *identityVerifier
+	limiter  *rateLimiter
 	client   *http.Client
 }
 
@@ -34,6 +37,8 @@ func newJoinHandler(store *conf.Store, balancer *entryBalancer, mux *multiplexer
 		store:    store,
 		balancer: balancer,
 		mux:      mux,
+		verifier: newIdentityVerifier(),
+		limiter:  newRateLimiter(),
 		client: &http.Client{
 			// BDS 协商最长等待约 15s, 留足余量
 			Timeout: 30 * time.Second,
@@ -66,13 +71,49 @@ func (h *joinHandler) offer(c *gin.Context) {
 		return
 	}
 	logger.Debug("join offer request", "network_id", c.Param("networkID"), "host", c.Request.Host, "backend", net.JoinHostPort(backend.Host, strconv.Itoa(backend.Port)), "sdp", string(body))
-	h.forward(c, backend, body, h.rewriteAnswer)
+
+	// relay_only 中继模式: 隐藏客户端真实地址, 强制全部流量经代理
+	if h.store.Get().Gateway.RelayOnly {
+		rewritten, err := RewriteOffer(body)
+		if err != nil {
+			logger.Warn("rewrite offer failed, passing through", "err", err)
+		} else {
+			body = rewritten
+		}
+	}
+
+	// 验证玩家身份 (offer 中微软签发的 identity JWT), 不转发到 BDS;
+	// 拒绝时返回与 BDS 一致的数字错误码 37 (IdentityNotAllowed)
+	player, err := h.verifier.verify(body)
+	if err != nil {
+		logger.Warn("identity rejected", "client", c.ClientIP(), "err", err)
+		c.Data(http.StatusOK, "application/sdp", []byte("37"))
+		return
+	}
+
+	// join 频率限制 (按 XUID)
+	if rl := h.store.Get().Gateway.RateLimit; rl.Enable && !h.limiter.allow(player.XUID, rl) {
+		logger.Warn("join rate limited", "client", c.ClientIP(), "player", player.Name, "xuid", player.XUID)
+		c.Data(http.StatusTooManyRequests, "text/plain; charset=utf-8", []byte("rate limited"))
+		return
+	}
+
+	// XUID 黑白名单 + webhook 判定
+	if ok, reason := h.checkAccess(player, c.ClientIP()); !ok {
+		logger.Warn("access denied", "client", c.ClientIP(), "player", player.Name, "xuid", player.XUID, "reason", reason)
+		c.Data(http.StatusOK, "application/sdp", []byte("37"))
+		return
+	}
+
+	h.forward(c, backend, body, func(status int, contentType string, respBody []byte) []byte {
+		return h.rewriteAnswer(status, contentType, respBody, player)
+	})
 }
 
 // rewriteAnswer 拦截 200/application/sdp 的 answer: 分配公网线路, 重写
 // candidate 并注册数据面会话。数字错误码 (纯数字 body) 与其他内容原样透传。
 // 重写/建会话失败时同样透传原始 answer, 保留 BDS 原始行为便于排障。
-func (h *joinHandler) rewriteAnswer(status int, contentType string, body []byte) []byte {
+func (h *joinHandler) rewriteAnswer(status int, contentType string, body []byte, player PlayerInfo) []byte {
 	if status != http.StatusOK || !strings.HasPrefix(contentType, "application/sdp") {
 		return body
 	}
@@ -104,11 +145,19 @@ func (h *joinHandler) rewriteAnswer(status int, contentType string, body []byte)
 	}
 	logger.Debug("answer rewritten", "ufrag", res.Ufrag, "backend", res.BackendAddr,
 		"original", string(body), "rewritten", string(res.Body))
-	if err := h.mux.CreateSession(res.Ufrag, res.Pwd, res.BackendAddr, key); err != nil {
+	info := session.SessionInfo{
+		Ufrag:       res.Ufrag,
+		Pwd:         res.Pwd,
+		Player:      player.Name,
+		XUID:        player.XUID,
+		BackendAddr: res.BackendAddr,
+		Entry:       key,
+	}
+	if err := h.mux.CreateSession(info); err != nil {
 		logger.Error("create session failed, passing through", "ufrag", res.Ufrag, "backend", res.BackendAddr, "err", err)
 		return passThrough()
 	}
-	logger.Info("session signaled", "ufrag", res.Ufrag, "backend", res.BackendAddr, "entry", key)
+	logger.Info("session signaled", "ufrag", res.Ufrag, "player", player.Name, "xuid", player.XUID, "backend", res.BackendAddr, "entry", key)
 	return res.Body
 }
 

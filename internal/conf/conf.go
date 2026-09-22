@@ -34,13 +34,37 @@ type MetricsConf struct {
 	Auth   bool `yaml:"auth" json:"auth"`     // 是否对指标路由启用 token 认证 (通过 Authorization: Bearer <token> 传递)
 }
 
+// 访问控制配置: XUID 黑白名单 + webhook 动态判定
+type AccessConf struct {
+	Mode    string      `yaml:"mode" json:"mode"`       // off/blacklist/whitelist
+	XUIDs   []string    `yaml:"xuids" json:"xuids"`     // XUID 名单
+	Webhook WebhookConf `yaml:"webhook" json:"webhook"` // webhook 动态判定
+}
+
+// webhook 动态判定配置: join 时向外部服务查询是否放行
+type WebhookConf struct {
+	Enable  bool   `yaml:"enable" json:"enable"`   // 是否启用
+	URL     string `yaml:"url" json:"url"`         // 判定接口, POST {"xuid","xname","client_ip"} 返回 {"allow":bool}
+	Timeout string `yaml:"timeout" json:"timeout"` // 调用超时, 如 "3s"
+}
+
+// join 频率限制配置: 按 XUID 滑动窗口限流
+type RateLimitConf struct {
+	Enable   bool   `yaml:"enable" json:"enable"`       // 是否启用
+	Interval string `yaml:"interval" json:"interval"`   // 窗口长度, 如 "60s"
+	MaxJoins int    `yaml:"max_joins" json:"max_joins"` // 每窗口每 XUID 最大 join 次数
+}
+
 // 网关服务器配置
 type GatewayConf struct {
-	Host    string      `yaml:"host" json:"host"`       // 网关主机
-	Port    int         `yaml:"port" json:"port"`       // 网关端口
-	Token   string      `yaml:"token" json:"token"`     // 访问令牌, 默认随机生成
-	TLS     TLSConf     `yaml:"tls" json:"tls"`         // TLS配置
-	Metrics MetricsConf `yaml:"metrics" json:"metrics"` // 指标配置
+	Host      string        `yaml:"host" json:"host"`             // 网关主机
+	Port      int           `yaml:"port" json:"port"`             // 网关端口
+	Token     string        `yaml:"token" json:"token"`           // 访问令牌, 默认随机生成
+	RelayOnly bool          `yaml:"relay_only" json:"relay_only"` // 中继模式: 隐藏客户端真实地址 (offer candidate 替换为不可达占位), 强制全部流量经代理
+	TLS       TLSConf       `yaml:"tls" json:"tls"`               // TLS配置
+	Metrics   MetricsConf   `yaml:"metrics" json:"metrics"`       // 指标配置
+	Access    AccessConf    `yaml:"access" json:"access"`         // 访问控制 (黑白名单/webhook)
+	RateLimit RateLimitConf `yaml:"rate_limit" json:"rate_limit"` // join 频率限制
 }
 
 // 端口复用器配置
@@ -170,6 +194,28 @@ func (c *Conf) Validate() error {
 
 	if c.Gateway.Metrics.Enable && c.Gateway.Metrics.Auth && c.Gateway.Token == "" {
 		errs = append(errs, errors.New("gateway.token: required when metrics auth is enabled"))
+	}
+
+	switch c.Gateway.Access.Mode {
+	case "", "off", "blacklist", "whitelist":
+	default:
+		errs = append(errs, fmt.Errorf("gateway.access.mode: invalid mode %q, expect off/blacklist/whitelist", c.Gateway.Access.Mode))
+	}
+	if c.Gateway.Access.Webhook.Enable {
+		if c.Gateway.Access.Webhook.URL == "" {
+			errs = append(errs, errors.New("gateway.access.webhook.url: required when webhook is enabled"))
+		}
+		if _, err := time.ParseDuration(c.Gateway.Access.Webhook.Timeout); err != nil {
+			errs = append(errs, fmt.Errorf("gateway.access.webhook.timeout: invalid duration %q", c.Gateway.Access.Webhook.Timeout))
+		}
+	}
+	if c.Gateway.RateLimit.Enable {
+		if _, err := time.ParseDuration(c.Gateway.RateLimit.Interval); err != nil {
+			errs = append(errs, fmt.Errorf("gateway.rate_limit.interval: invalid duration %q", c.Gateway.RateLimit.Interval))
+		}
+		if c.Gateway.RateLimit.MaxJoins < 1 {
+			errs = append(errs, errors.New("gateway.rate_limit.max_joins: must be >= 1"))
+		}
 	}
 
 	if err := checkPort("multiplexer.port", c.Multiplexer.Port); err != nil {

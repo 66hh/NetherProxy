@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"NetherProxy/internal/conf"
 	"NetherProxy/internal/logger"
 )
 
@@ -51,17 +52,7 @@ func (s State) String() string {
 	return fmt.Sprintf("State(%d)", uint8(s))
 }
 
-// 超时参数。
-const (
-	// SignaledTimeout 是 Signaled 状态等待首个 STUN 的超时。
-	SignaledTimeout = 30 * time.Second
-	// ActiveIdleTimeout 是 Active 会话空闲多久后转入 Idle。
-	ActiveIdleTimeout = 120 * time.Second
-	// IdleReapTimeout 是 Idle 会话多久后被回收。
-	IdleReapTimeout = 300 * time.Second
-	// TupleStaleTimeout 是客户端地址软状态的有效期。
-	TupleStaleTimeout = 60 * time.Second
-)
+// 超时参数由 conf.SessionConf 配置, 每次判定从配置中心读取, 热更即时生效
 
 // ErrClosed 表示会话已经关闭。
 var ErrClosed = errors.New("session: session closed")
@@ -170,11 +161,11 @@ func (s *Session) Touch() {
 }
 
 // MatchesClient 报告 addr 是否为当前生效的客户端地址（校验 5-tuple 软状态）。
-func (s *Session) MatchesClient(addr netip.AddrPort) bool {
+func (s *Session) MatchesClient(addr netip.AddrPort, staleTimeout time.Duration) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.hasClient && !s.closed && s.client == addr &&
-		time.Since(s.lastTuple) < TupleStaleTimeout
+		time.Since(s.lastTuple) < staleTimeout
 }
 
 // close 关闭内部 socket 并将会话标记为 Closed。幂等。
@@ -191,7 +182,7 @@ func (s *Session) close() {
 
 // reap 依据状态机执行超时判定，返回是否应回收该会话。
 // 仅在 Table 的 reaper 中调用。
-func (s *Session) reap(now time.Time) (closeIt bool) {
+func (s *Session) reap(now time.Time, cfg conf.SessionConf) (closeIt bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
@@ -199,15 +190,15 @@ func (s *Session) reap(now time.Time) (closeIt bool) {
 	}
 	switch s.state {
 	case StateSignaled:
-		if now.Sub(s.created) > SignaledTimeout {
+		if now.Sub(s.created) > cfg.Signaled() {
 			return true
 		}
 	case StateICEChecking, StateActive:
-		if now.Sub(s.lastActivity) > ActiveIdleTimeout {
+		if now.Sub(s.lastActivity) > cfg.ActiveIdle() {
 			s.state = StateIdle
 		}
 	case StateIdle:
-		if now.Sub(s.lastActivity) > IdleReapTimeout {
+		if now.Sub(s.lastActivity) > cfg.IdleReap() {
 			return true
 		}
 	}
@@ -219,6 +210,7 @@ func (s *Session) reap(now time.Time) (closeIt bool) {
 // 一致性说明：byClient 反向索引允许短暂滞后——查找时会用
 // Session.MatchesClient 复核，滞后的条目被视为不存在并顺手清理。
 type Table struct {
+	store    *conf.Store
 	mu       sync.RWMutex
 	byUfrag  map[string]*Session
 	byClient map[netip.AddrPort]*Session
@@ -232,8 +224,9 @@ type Table struct {
 }
 
 // NewTable 创建会话表并启动后台回收 goroutine。
-func NewTable() *Table {
+func NewTable(store *conf.Store) *Table {
 	t := &Table{
+		store:        store,
 		byUfrag:      make(map[string]*Session),
 		byClient:     make(map[netip.AddrPort]*Session),
 		reapInterval: 10 * time.Second,
@@ -321,7 +314,7 @@ func (t *Table) ByClient(addr netip.AddrPort) *Session {
 	if s == nil {
 		return nil
 	}
-	if !s.MatchesClient(addr) {
+	if !s.MatchesClient(addr, t.store.Get().Session.TupleStale()) {
 		t.mu.Lock()
 		if t.byClient[addr] == s {
 			delete(t.byClient, addr)
@@ -420,9 +413,10 @@ func (t *Table) reaper() {
 
 func (t *Table) reap(now time.Time) {
 	var removed []*Session
+	cfg := t.store.Get().Session
 	t.mu.Lock()
 	for _, s := range t.byUfrag {
-		if !s.reap(now) {
+		if !s.reap(now, cfg) {
 			continue
 		}
 		t.removeLocked(s)

@@ -55,7 +55,7 @@ func main() {
 	logger.Info("NetherProxy started")
 
 	store := conf.NewStore(configPath, cfg)
-	table := session.NewTable()
+	table := session.NewTable(store)
 	tracker := multiplexer.NewEntryTracker(entryStatsPath)
 
 	mux := multiplexer.New(store, table, tracker)

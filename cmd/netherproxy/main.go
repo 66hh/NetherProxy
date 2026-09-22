@@ -48,7 +48,7 @@ func main() {
 
 	logger.Info("NetherProxy started")
 
-	gw := gateway.New(cfg.Gateway)
+	gw := gateway.New(conf.NewStore(configPath, cfg))
 
 	go func() {
 		if err := gw.Start(); err != nil {

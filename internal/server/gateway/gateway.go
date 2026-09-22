@@ -45,23 +45,26 @@ func init() {
 
 // Gateway 网关 HTTP 服务
 type Gateway struct {
-	conf conf.GatewayConf
-	srv  *http.Server
+	store *conf.Store
+	srv   *http.Server
 }
 
-const apiPrefix = "/api"
-
-// New 创建网关服务
-func New(cfg conf.GatewayConf) *Gateway {
+// New 创建网关服务, 监听地址/TLS/metrics 开关取启动时配置, 之后重载不生效
+func New(store *conf.Store) *Gateway {
+	cfg := store.Get().Gateway
 	router := gin.New()
 	router.Use(gin.Recovery(), accessLog())
 
-	api := router.Group(apiPrefix)
+	// NetherNet 信令端点, 客户端硬编码路径, 必须挂在根路径
+	join := newJoinHandler(store)
+	router.GET("/v1/join", join.motd)
+
+	api := router.Group("/api")
 
 	if cfg.Metrics.Enable {
 		router.Use(collectMetrics())
 		if cfg.Metrics.Auth {
-			api.GET("/metrics", tokenAuth(cfg.Token), gin.WrapH(promhttp.Handler()))
+			api.GET("/metrics", tokenAuth(store), gin.WrapH(promhttp.Handler()))
 		} else {
 			api.GET("/metrics", gin.WrapH(promhttp.Handler()))
 		}
@@ -71,8 +74,10 @@ func New(cfg conf.GatewayConf) *Gateway {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 
+	registerConfigAPI(api, store)
+
 	return &Gateway{
-		conf: cfg,
+		store: store,
 		srv: &http.Server{
 			Addr:              net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port)),
 			Handler:           router,
@@ -84,10 +89,11 @@ func New(cfg conf.GatewayConf) *Gateway {
 
 // Start 启动网关服务, 阻塞直到服务停止或被关闭
 func (g *Gateway) Start() error {
+	cfg := g.store.Get().Gateway
 	var err error
-	if g.conf.TLS.Enable {
-		logger.Info("gateway listening with TLS", "addr", g.srv.Addr, "cert", g.conf.TLS.Cert)
-		err = g.srv.ListenAndServeTLS(g.conf.TLS.Cert, g.conf.TLS.Key)
+	if cfg.TLS.Enable {
+		logger.Info("gateway listening with TLS", "addr", g.srv.Addr, "cert", cfg.TLS.Cert)
+		err = g.srv.ListenAndServeTLS(cfg.TLS.Cert, cfg.TLS.Key)
 	} else {
 		logger.Info("gateway listening", "addr", g.srv.Addr)
 		err = g.srv.ListenAndServe()
@@ -118,10 +124,11 @@ func accessLog() gin.HandlerFunc {
 	}
 }
 
-// tokenAuth 校验 Authorization: Bearer <token> 请求头, 使用常量时间比较防止时序攻击
-func tokenAuth(token string) gin.HandlerFunc {
-	expected := []byte("Bearer " + token)
+// tokenAuth 校验 Authorization: Bearer <gateway.token> 请求头, 使用常量时间比较防止时序攻击
+// token 每次请求从配置中心读取, 重载后即时生效
+func tokenAuth(store *conf.Store) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		expected := []byte("Bearer " + store.Get().Gateway.Token)
 		if subtle.ConstantTimeCompare([]byte(c.GetHeader("Authorization")), expected) != 1 {
 			c.AbortWithStatus(http.StatusUnauthorized)
 			return

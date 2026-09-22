@@ -9,7 +9,10 @@ import (
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
-var global = slog.Default()
+var (
+	global   = slog.Default()
+	levelVar = new(slog.LevelVar)
+)
 
 // Init 初始化全局日志器
 // level: debug/info/warn/error, format: text/json, w 为 nil 时输出到标准输出
@@ -17,7 +20,8 @@ func Init(level string, format string, w io.Writer) {
 	if w == nil {
 		w = os.Stdout
 	}
-	opts := &slog.HandlerOptions{Level: parseLevel(level)}
+	SetLevel(level)
+	opts := &slog.HandlerOptions{Level: levelVar}
 	var handler slog.Handler
 	if strings.EqualFold(format, "json") {
 		handler = slog.NewJSONHandler(w, opts)
@@ -26,6 +30,11 @@ func Init(level string, format string, w io.Writer) {
 	}
 	global = slog.New(handler)
 	slog.SetDefault(global)
+}
+
+// SetLevel 动态调整日志级别, 配置热重载时使用
+func SetLevel(level string) {
+	levelVar.Set(parseLevel(level))
 }
 
 func parseLevel(level string) slog.Level {

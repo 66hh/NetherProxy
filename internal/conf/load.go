@@ -83,13 +83,3 @@ func Save(path string, cfg *Conf) error {
 	}
 	return nil
 }
-
-// Reload 从文件重新加载配置, 校验失败时保留原配置不变
-func (c *Conf) Reload(path string) error {
-	cfg, err := Load(path)
-	if err != nil {
-		return err
-	}
-	*c = *cfg
-	return nil
-}

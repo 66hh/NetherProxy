@@ -172,7 +172,12 @@ func (g *Gateway) startDual(cfg conf.GatewayConf) error {
 	errCh := make(chan error, 2)
 	go func() { errCh <- g.srv.Serve(plainLn) }()
 	go func() { errCh <- g.srv.Serve(tlsLn) }()
-	return <-errCh
+	err = <-errCh
+	// Shutdown 先关底层 listener, Serve 返回 net.ErrClosed 属正常关闭
+	if errors.Is(err, net.ErrClosed) {
+		return nil
+	}
+	return err
 }
 
 // Shutdown 优雅关闭网关服务, 等待进行中的请求处理完毕

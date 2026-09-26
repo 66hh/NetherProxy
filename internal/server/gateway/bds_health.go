@@ -204,6 +204,16 @@ func (p *bdsProber) start() {
 func (p *bdsProber) close() {
 	p.cancel()
 	<-p.done
+	p.mu.Lock()
+	workers := make([]*bdsWorker, 0, len(p.workers))
+	for _, w := range p.workers {
+		workers = append(workers, w)
+	}
+	p.workers = make(map[string]*bdsWorker)
+	p.mu.Unlock()
+	for _, w := range workers {
+		w.stop()
+	}
 }
 
 func (p *bdsProber) reconcileLoop(ctx context.Context) {
@@ -241,18 +251,20 @@ func (p *bdsProber) reconcile(ctx context.Context) {
 	}
 
 	p.mu.Lock()
+	var toStop []*bdsWorker
 	for key, w := range p.workers {
 		b, ok := want[key]
 		if !ok {
-			w.stop()
 			delete(p.workers, key)
+			toStop = append(toStop, w)
 			continue
 		}
 		if w.bds != b {
-			w.stop()
-			w = newBDSWorker(key, b, p.tracker, p.client)
-			p.workers[key] = w
-			w.start(ctx)
+			delete(p.workers, key)
+			toStop = append(toStop, w)
+			nw := newBDSWorker(key, b, p.tracker, p.client)
+			p.workers[key] = nw
+			nw.start(ctx)
 		}
 	}
 	for key, b := range want {
@@ -264,6 +276,11 @@ func (p *bdsProber) reconcile(ctx context.Context) {
 		}
 	}
 	p.mu.Unlock()
+
+	// stop 在锁外执行 (可能等待进行中的探测)
+	for _, w := range toStop {
+		w.stop()
+	}
 }
 
 // bdsWorker 单个 BDS 的探测 worker

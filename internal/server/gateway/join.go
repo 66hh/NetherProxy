@@ -92,8 +92,9 @@ func (h *joinHandler) motd(c *gin.Context) {
 		}
 		// 缓存失效时的并发回源合并 (singleflight): 只有一个请求真正打到 BDS
 		call := &motdCall{done: make(chan struct{})}
-		_, loaded := h.motdFlight.LoadOrStore(key, call)
+		v, loaded := h.motdFlight.LoadOrStore(key, call)
 		if loaded {
+			call = v.(*motdCall) // 等待回源发起者的 done
 			select {
 			case <-call.done:
 				if ent := h.getCachedMotd(key); ent != nil {
@@ -335,6 +336,9 @@ func (h *joinHandler) forward(c *gin.Context, backend *conf.BDSConf, body []byte
 		return
 	}
 	copyHeaders(req.Header, c.Request.Header)
+	// 删除 Accept-Encoding 让 Transport 自动处理 gzip 解压,
+	// 否则后端若返回压缩内容, 拦截解析会拿到密文
+	req.Header.Del("Accept-Encoding")
 	req.Host = c.Request.Host
 
 	resp, err := h.client.Do(req)

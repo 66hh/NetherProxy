@@ -90,7 +90,10 @@ type bufHandler struct {
 
 // WithAttrs 保持缓冲包装并累积绑定属性, 防止派生 logger 绕过内存缓冲
 func (h bufHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	return bufHandler{h.Handler.WithAttrs(attrs), append(h.attrs, attrs...)}
+	merged := make([]slog.Attr, 0, len(h.attrs)+len(attrs))
+	merged = append(merged, h.attrs...)
+	merged = append(merged, attrs...)
+	return bufHandler{h.Handler.WithAttrs(attrs), merged}
 }
 
 // WithGroup 保持缓冲包装

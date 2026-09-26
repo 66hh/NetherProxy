@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/signal"
 	"syscall"
@@ -81,7 +82,8 @@ func main() {
 	if cfg.Gateway.TLS.Enable {
 		scheme = "https"
 	}
-	logger.Info("web panel starting", "url", fmt.Sprintf("%s://%s:%d/", scheme, panelHost, cfg.Gateway.Port))
+	panelAddr := net.JoinHostPort(panelHost, fmt.Sprint(cfg.Gateway.Port))
+	logger.Info("web panel starting", "url", fmt.Sprintf("%s://%s/", scheme, panelAddr))
 	// token 只打印到控制台, 不进日志缓冲 (面板日志页可见日志缓冲)
 	fmt.Printf("gateway token: %s\n", cfg.Gateway.Token)
 

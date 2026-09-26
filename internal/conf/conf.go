@@ -263,11 +263,14 @@ func (c *Conf) Validate() error {
 	if c.Gateway.Token == MaskedToken {
 		errs = append(errs, errors.New("gateway.token: must not be the masked placeholder"))
 	}
-	// 写操作路由禁止豁免认证
+	// 写操作路由禁止豁免认证 ("GET /api/config" 只读除外)
 	for _, route := range c.Gateway.APIAuthExempt {
-		p := route
-		if _, rest, found := strings.Cut(route, " "); found {
-			p = rest
+		method, p, found := strings.Cut(route, " ")
+		if found && strings.EqualFold(method, "GET") {
+			continue // 显式 GET 只读豁免, 放行
+		}
+		if !found {
+			p = route
 		}
 		if p == "/api/config" || strings.HasPrefix(p, "/api/session/") {
 			errs = append(errs, fmt.Errorf("gateway.api_auth_exempt: write-capable route %q must not be exempt", route))
@@ -319,6 +322,9 @@ func (c *Conf) Validate() error {
 			errs = append(errs, fmt.Errorf("%s: invalid duration %q", item.field, item.value))
 		}
 	}
+	if c.Session.IdleReap() < c.Session.ActiveIdle() {
+		errs = append(errs, errors.New("session.idle_reap_timeout: must be >= session.active_idle_timeout"))
+	}
 
 	seenDomains := make(map[string]bool)
 	for i, bds := range c.BDS {
@@ -328,10 +334,12 @@ func (c *Conf) Validate() error {
 		}
 
 		domain := strings.ToLower(strings.TrimSpace(bds.Domain))
-		if domain != "" && seenDomains[domain] {
-			errs = append(errs, fmt.Errorf("bds[%d].domain: duplicate domain %q, only the first entry takes effect", i, bds.Domain))
+		if domain != "" {
+			if seenDomains[domain] {
+				errs = append(errs, fmt.Errorf("bds[%d].domain: duplicate domain %q, only the first entry takes effect", i, bds.Domain))
+			}
+			seenDomains[domain] = true
 		}
-		seenDomains[domain] = true
 
 		if bds.Domain == "" {
 			errs = append(errs, fmt.Errorf("bds[%d].domain: required when enabled", i))

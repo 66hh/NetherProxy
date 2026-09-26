@@ -141,6 +141,8 @@ func resolveEntryIP(host string) (netip.Addr, error) {
 	defer cancel()
 	ips, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
 	if err != nil {
+		// 短 TTL 负缓存: DNS 故障期间避免每个 join 都阻塞
+		dnsCache.Store(host, &dnsCacheEnt{err: err, expires: time.Now().Add(10 * time.Second)})
 		return netip.Addr{}, err
 	}
 	var ip netip.Addr

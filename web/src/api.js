@@ -8,6 +8,8 @@ export function setToken(t) {
   else localStorage.removeItem('np_token')
 }
 
+import { connState } from './state'
+
 export async function api(path, method = 'GET', body, opts = {}) {
   const hadToken = !!token
   const resp = await fetch(path, {
@@ -26,6 +28,8 @@ export async function api(path, method = 'GET', body, opts = {}) {
     throw new Error('unauthorized')
   }
   const data = await resp.json().catch(() => ({}))
+  connState.failed = !resp.ok
   if (!resp.ok) throw new Error(data.details || data.error || 'HTTP ' + resp.status)
   return data
 }
+

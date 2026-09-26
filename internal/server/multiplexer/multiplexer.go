@@ -107,15 +107,6 @@ func (m *Multiplexer) Start() error {
 	return nil
 }
 
-// Port 返回公网监听端口。
-func (m *Multiplexer) Port() uint16 {
-	addr, ok := m.public.LocalAddr().(*net.UDPAddr)
-	if !ok {
-		return 0
-	}
-	return uint16(addr.Port)
-}
-
 // Table 返回数据面使用的会话表。
 func (m *Multiplexer) Table() *session.Table {
 	return m.table
@@ -251,6 +242,7 @@ func (m *Multiplexer) backendLoop(sess *session.Session) {
 		}
 	}()
 	buf := make([]byte, maxUDPPacketSize)
+	errCount := 0
 	for {
 		n, err := sess.Backend().Read(buf)
 		if err != nil {
@@ -259,10 +251,18 @@ func (m *Multiplexer) backendLoop(sess *session.Session) {
 			if errors.Is(err, net.ErrClosed) || sess.State() == session.StateClosed {
 				return
 			}
-			logger.Debug("backend read failed", "ufrag", sess.Ufrag, "err", err)
+			errCount++
+			logger.Debug("backend read failed", "ufrag", sess.Ufrag, "err", err, "count", errCount)
+			if errCount >= 50 {
+				// 持续报错 (如永久 WSAECONNRESET): 回收会话防空转刷屏
+				logger.Warn("backend read keeps failing, closing session", "ufrag", sess.Ufrag, "err", err)
+				m.table.RemoveByUfrag(sess.Ufrag)
+				return
+			}
 			time.Sleep(10 * time.Millisecond)
 			continue
 		}
+		errCount = 0
 		client, ok := sess.Client()
 		if !ok {
 			continue // 客户端地址尚未学习，无法回包

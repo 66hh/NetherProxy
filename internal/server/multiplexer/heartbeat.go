@@ -125,11 +125,18 @@ func NewEntryTracker(path string, store *conf.Store) *EntryTracker {
 	return t
 }
 
-// Close 停止后台落盘并写入最终统计
+// Close 停止后台落盘并写入最终统计 (失败短重试一次)
 func (t *EntryTracker) Close() {
 	t.cancel()
 	<-t.done
 	t.flush()
+	t.mu.RLock()
+	dirty := t.dirty
+	t.mu.RUnlock()
+	if dirty {
+		time.Sleep(100 * time.Millisecond)
+		t.flush()
+	}
 }
 
 // load 启动时加载既有统计 (如上次运行的累计探测数)
@@ -223,10 +230,11 @@ func (t *EntryTracker) flush() {
 	}
 }
 
-// reDirty 写失败后重新置脏, 下个 tick 重试
+// reDirty 写失败后重新置脏并保留 urgent, 下个 tick 重试
 func (t *EntryTracker) reDirty() {
 	t.mu.Lock()
 	t.dirty = true
+	t.urgent = true
 	t.mu.Unlock()
 }
 
@@ -457,6 +465,7 @@ type hbWorker struct {
 	mu        sync.Mutex
 	conn      *net.UDPConn // 进行中的 probe 使用的连接, stop 时关闭以打断阻塞的 Read
 	isStopped bool
+	raddr     *net.UDPAddr // 缓存的线路解析地址 (探测失败时清除重解析)
 }
 
 func newHBWorker(key string, entry conf.EntryConf, tracker *EntryTracker) *hbWorker {
@@ -512,14 +521,17 @@ func (w *hbWorker) run(ctx context.Context) {
 }
 
 // probeOnce 执行一次探测: 每次新建连接, resolve/dial 失败也计入统计,
-// 下一轮 tick 自动重试
+// 下一轮 tick 自动重试。地址解析结果缓存于 worker, 解析失败时清除以便下轮重试。
 func (w *hbWorker) probeOnce(hb conf.HeartbeatConf) {
-	raddr, err := net.ResolveUDPAddr("udp", w.key)
-	if err != nil {
-		w.recordResult(0, fmt.Errorf("resolve entry: %w", err), hb)
-		return
+	if w.raddr == nil {
+		raddr, err := net.ResolveUDPAddr("udp", w.key)
+		if err != nil {
+			w.recordResult(0, fmt.Errorf("resolve entry: %w", err), hb)
+			return
+		}
+		w.raddr = raddr
 	}
-	conn, err := net.DialUDP("udp", nil, raddr)
+	conn, err := net.DialUDP("udp", nil, w.raddr)
 	if err != nil {
 		w.recordResult(0, fmt.Errorf("dial entry: %w", err), hb)
 		return
@@ -561,10 +573,12 @@ func (w *hbWorker) probeOnce(hb conf.HeartbeatConf) {
 	buf := make([]byte, 64)
 	n, err := conn.Read(buf)
 	if err != nil {
+		w.raddr = nil // 下轮重新解析 (线路可能换 IP)
 		w.recordResult(0, err, hb)
 		return
 	}
 	if !isPongFor(buf[:n], pkt) {
+		w.raddr = nil
 		w.recordResult(0, errors.New("invalid pong"), hb)
 		return
 	}

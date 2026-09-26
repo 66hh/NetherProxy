@@ -4,7 +4,6 @@ import (
 	"crypto/tls"
 	"net"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -53,7 +52,7 @@ type prefixConn struct {
 }
 
 func (c *prefixConn) Read(b []byte) (int, error) {
-	if c.hasPrefix {
+	if c.hasPrefix && len(b) > 0 {
 		c.hasPrefix = false
 		b[0] = c.prefix
 		return 1, nil
@@ -63,11 +62,10 @@ func (c *prefixConn) Read(b []byte) (int, error) {
 
 // chanListener 基于 channel 的 net.Listener
 type chanListener struct {
-	conns  chan net.Conn
-	addr   net.Addr
-	done   chan struct{}
-	closed atomic.Bool
-	once   sync.Once
+	conns chan net.Conn
+	addr  net.Addr
+	done  chan struct{}
+	once  sync.Once
 }
 
 func newChanListener(addr net.Addr) *chanListener {
@@ -84,7 +82,7 @@ func (l *chanListener) Accept() (net.Conn, error) {
 }
 
 func (l *chanListener) Close() error {
-	l.once.Do(func() { l.closed.Store(true); close(l.done) })
+	l.once.Do(func() { close(l.done) })
 	return nil
 }
 

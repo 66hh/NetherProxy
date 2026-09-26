@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { api, getToken, setToken } from './api'
+import { connState } from './state'
 import Dashboard from './pages/Dashboard'
 import Sessions from './pages/Sessions'
 import Entries from './pages/Entries'
@@ -9,6 +10,15 @@ import Logs from './pages/Logs'
 
 export const ToastCtx = React.createContext(() => {})
 export const ConfigCtx = React.createContext({ cfg: null, version: 0, refresh: () => {} })
+
+function ConnState() {
+  const [ok, setOk] = useState(true)
+  useEffect(() => {
+    const t = setInterval(() => setOk(!connState.failed), 2000)
+    return () => clearInterval(t)
+  }, [])
+  return <span className="row"><span className={`dot ${ok ? 'up' : 'down'}`}></span>{ok ? '已连接' : '连接断开'}</span>
+}
 
 export default function App() {
   const [authed, setAuthed] = useState(false)
@@ -64,7 +74,7 @@ export default function App() {
         <header>
           <h1>NetherProxy</h1>
           <span className="spacer"></span>
-          <span className="row"><span className="dot up"></span>已连接</span>
+          <ConnState />
           <button className="btn" onClick={() => { setToken(''); location.reload() }}>退出</button>
         </header>
         <nav>

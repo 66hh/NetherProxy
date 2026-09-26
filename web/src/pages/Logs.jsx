@@ -39,8 +39,8 @@ export default function Logs() {
         {logs.map((l, i) => (
           <div key={i} className="log-line">
             <span className="log-time">{new Date(l.time).toLocaleTimeString('zh-CN', { hour12: false })}</span>
-            <span className="log-level" style={{ color: LV_COLOR[l.Level] || 'var(--dim)' }}>{l.Level}</span>
-            <span className="log-msg">{l.Msg}{l.Attrs ? <span className="log-attrs"> {l.Attrs}</span> : null}</span>
+            <span className="log-level" style={{ color: LV_COLOR[l.level] || 'var(--dim)' }}>{l.level}</span>
+            <span className="log-msg">{l.msg}{l.attrs ? <span className="log-attrs"> {l.attrs}</span> : null}</span>
           </div>
         ))}
         {!logs.length && <div className="row">暂无日志</div>}

@@ -11,3 +11,7 @@
 /entry_stats.json
 # 运行期二进制覆盖残留
 netherproxy.exe~
+
+# 前端
+web/node_modules/
+web/dist/

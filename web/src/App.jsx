@@ -1,16 +1,18 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { api, getToken, setToken } from './api'
+import Dashboard from './pages/Dashboard'
 import Sessions from './pages/Sessions'
 import Entries from './pages/Entries'
 import Bds from './pages/Bds'
 import Config from './pages/Config'
+import Logs from './pages/Logs'
 
 export const ToastCtx = React.createContext(() => {})
 export const ConfigCtx = React.createContext({ cfg: null, refresh: () => {} })
 
 export default function App() {
   const [authed, setAuthed] = useState(false)
-  const [tab, setTab] = useState('sessions')
+  const [tab, setTab] = useState('dashboard')
   const [cfg, setCfg] = useState(null)
   const [toastMsg, setToastMsg] = useState(null)
 
@@ -52,7 +54,7 @@ export default function App() {
     )
   }
 
-  const tabs = [['sessions', '会话'], ['entries', '线路'], ['bds', 'BDS'], ['config', '配置']]
+  const tabs = [['dashboard', '概览'], ['sessions', '会话'], ['entries', '线路'], ['bds', 'BDS'], ['logs', '日志'], ['config', '配置']]
   return (
     <ToastCtx.Provider value={toast}>
       <ConfigCtx.Provider value={{ cfg, refresh }}>
@@ -68,9 +70,11 @@ export default function App() {
           ))}
         </nav>
         <main>
+          {tab === 'dashboard' && <Dashboard />}
           {tab === 'sessions' && <Sessions />}
           {tab === 'entries' && <Entries />}
           {tab === 'bds' && <Bds />}
+          {tab === 'logs' && <Logs />}
           {tab === 'config' && <Config />}
         </main>
         {toastMsg && <div className={`toast${toastMsg.isErr ? ' err' : ''}`}>{toastMsg.msg}</div>}

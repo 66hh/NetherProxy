@@ -54,6 +54,7 @@ type Gateway struct {
 	store  *conf.Store
 	srv    *http.Server
 	prober *bdsProber
+	stats  *statsSampler
 }
 
 // New 创建网关服务, 监听地址/TLS/metrics 开关取启动时配置, 之后重载不生效
@@ -77,6 +78,7 @@ func New(store *conf.Store, mux *multiplexer.Multiplexer, tracker *multiplexer.E
 	bdsTrack := newBDSTracker(store)
 	prober := newBDSProber(store, bdsTrack)
 	prober.start()
+	stats := newStatsSampler(store, mux.Table(), mux, tracker, bdsTrack)
 	join := newJoinHandler(store, balancer, mux, bdsTrack)
 	router.GET("/v1/join", join.motd)
 	router.POST("/v1/join/:networkID", join.offer)
@@ -98,6 +100,12 @@ func New(store *conf.Store, mux *multiplexer.Multiplexer, tracker *multiplexer.E
 	// BDS 状态与健康统计
 	api.GET("/bds", handleBDSStatus(store, bdsTrack))
 
+	// 日志查看 (内存缓冲)
+	api.GET("/log", handleLog)
+
+	// 代理状态采样 (折线图)
+	api.GET("/stats", stats.handleStats)
+
 	// 会话列表 (含玩家信息与流量统计)
 	api.GET("/session", handleSessionList(mux.Table()))
 	// 掐断指定会话
@@ -108,6 +116,7 @@ func New(store *conf.Store, mux *multiplexer.Multiplexer, tracker *multiplexer.E
 	return &Gateway{
 		store:  store,
 		prober: prober,
+		stats:  stats,
 		srv: &http.Server{
 			Addr:    net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port)),
 			Handler: router,
@@ -165,6 +174,7 @@ func (g *Gateway) startDual(cfg conf.GatewayConf) error {
 // Shutdown 优雅关闭网关服务, 等待进行中的请求处理完毕
 func (g *Gateway) Shutdown(ctx context.Context) error {
 	g.prober.close()
+	g.stats.close()
 	return g.srv.Shutdown(ctx)
 }
 

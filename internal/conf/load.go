@@ -28,6 +28,7 @@ func Default() *Conf {
 			MaxSize:    100,
 			MaxBackups: 7,
 			MaxAge:     30,
+			BufferSize: 1000,
 		},
 		Gateway: GatewayConf{
 			Host:           "0.0.0.0",

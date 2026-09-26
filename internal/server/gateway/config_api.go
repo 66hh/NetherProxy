@@ -3,6 +3,7 @@ package gateway
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -99,6 +100,17 @@ func handleEntryStatus(store *conf.Store, tracker *multiplexer.EntryTracker, bal
 		}
 		c.JSON(http.StatusOK, gin.H{"entries": entries})
 	}
+}
+
+// handleLog 返回内存日志缓冲的最近条目 (面板日志查看)
+// 参数: tail 条数 (默认 200, 上限 1000), level 最低级别 (默认 debug)
+func handleLog(c *gin.Context) {
+	tail := 200
+	if v, err := strconv.Atoi(c.Query("tail")); err == nil && v > 0 {
+		tail = min(v, 1000)
+	}
+	level := c.DefaultQuery("level", "debug")
+	c.JSON(http.StatusOK, gin.H{"logs": logger.TailLog(tail, level)})
 }
 
 // handleSessionList 返回当前会话列表 (含玩家名/状态/流量)

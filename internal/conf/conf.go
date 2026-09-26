@@ -185,6 +185,7 @@ type LogConf struct {
 	MaxBackups int    `yaml:"max_backups" json:"max_backups"` // 保留的旧日志文件数量上限, 0 表示不限制
 	MaxAge     int    `yaml:"max_age" json:"max_age"`         // 旧日志文件保留天数, 0 表示不限制
 	Compress   bool   `yaml:"compress" json:"compress"`       // 是否压缩轮转后的旧日志
+	BufferSize int    `yaml:"buffer_size" json:"buffer_size"` // 内存日志缓冲条数 (面板日志查看), 0 用默认 1000
 }
 
 // 统计配置
@@ -228,6 +229,9 @@ func (c *Conf) Validate() error {
 		errs = append(errs, fmt.Errorf("log.max_backups: must not be negative, got %d", c.Log.MaxBackups))
 	}
 
+	if c.Log.BufferSize < 0 {
+		errs = append(errs, errors.New("log.buffer_size: must not be negative"))
+	}
 	if c.Log.MaxAge < 0 {
 		errs = append(errs, fmt.Errorf("log.max_age: must not be negative, got %d", c.Log.MaxAge))
 	}

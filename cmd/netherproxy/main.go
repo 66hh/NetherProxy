@@ -52,6 +52,7 @@ func main() {
 	}
 
 	logger.Init(cfg.Log.Level, cfg.Log.Format, w)
+	logger.SetBufSize(cfg.Log.BufferSize)
 
 	logger.Info("NetherProxy started")
 

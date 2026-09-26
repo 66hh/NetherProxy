@@ -57,6 +57,14 @@ type Multiplexer struct {
 	ctx     context.Context
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
+
+	totalRx atomic.Uint64 // 全局流量 (客户端 -> BDS)
+	totalTx atomic.Uint64 // BDS -> 客户端
+}
+
+// TotalTraffic 返回全局累计转发流量 (字节)
+func (m *Multiplexer) TotalTraffic() (rx, tx uint64) {
+	return m.totalRx.Load(), m.totalTx.Load()
 }
 
 // New 创建数据面, 尚未开始监听。
@@ -199,6 +207,7 @@ func (m *Multiplexer) handle(pkt []byte, src netip.AddrPort) {
 			m.table.BindClient(sess, src)
 		}
 		sess.AddRx(len(pkt))
+		m.totalRx.Add(uint64(len(pkt)))
 		trafficBytes.WithLabelValues("rx").Add(float64(len(pkt)))
 		if _, err := sess.Backend().Write(pkt); err != nil {
 			logger.Debug("forward STUN to backend failed", "ufrag", ufrag, "err", err)
@@ -215,6 +224,7 @@ func (m *Multiplexer) handle(pkt []byte, src netip.AddrPort) {
 	}
 	sess.Touch()
 	sess.AddRx(len(pkt))
+	m.totalRx.Add(uint64(len(pkt)))
 	trafficBytes.WithLabelValues("rx").Add(float64(len(pkt)))
 	if _, err := sess.Backend().Write(pkt); err != nil {
 		logger.Debug("forward data to backend failed", "client", src, "err", err)
@@ -253,6 +263,7 @@ func (m *Multiplexer) backendLoop(sess *session.Session) {
 			continue // 客户端地址尚未学习，无法回包
 		}
 		sess.AddTx(n)
+		m.totalTx.Add(uint64(n))
 		trafficBytes.WithLabelValues("tx").Add(float64(n))
 		if _, err := m.public.WriteToUDPAddrPort(buf[:n], client); err != nil {
 			logger.Debug("forward to client failed", "ufrag", sess.Ufrag, "err", err)

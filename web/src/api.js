@@ -18,6 +18,7 @@ export async function api(path, method = 'GET', body) {
   })
   if (resp.status === 401) {
     setToken('')
+    location.reload()
     throw new Error('unauthorized')
   }
   const data = await resp.json().catch(() => ({}))

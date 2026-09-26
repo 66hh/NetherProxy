@@ -28,7 +28,7 @@ export default function Sessions() {
 
   function kill(ufrag) {
     if (!confirm('确认掐断会话 ' + ufrag + '?')) return
-    api('/api/session/' + ufrag, 'DELETE')
+    api('/api/session/' + encodeURIComponent(ufrag), 'DELETE')
       .then(() => { toast('已掐断'); load() })
       .catch(e => toast(e.message, true))
   }
@@ -37,11 +37,16 @@ export default function Sessions() {
     if (!xuid) { toast('该会话无 XUID', true); return }
     if (!cfg) { toast('配置加载中, 请稍后', true); return }
     const mode = cfg.gateway.access.mode
-    if (mode === 'whitelist' && !confirm('当前为白名单模式, 拉黑将切换为黑名单模式, 确认?')) return
-    else if (!confirm(`将玩家 ${name} (${xuid}) 加入黑名单?`)) return
+    const msg = mode === 'whitelist'
+      ? '当前为白名单模式, 拉黑将切换为黑名单模式并仅保留该玩家, 确认?'
+      : `将玩家 ${name} (${xuid}) 加入黑名单?`
+    if (!confirm(msg)) return
     const c = JSON.parse(JSON.stringify(cfg))
     c.gateway.access.mode = 'blacklist'
-    c.gateway.access.xuids = [...new Set([...(c.gateway.access.xuids || []), xuid])]
+    // whitelist 的原名单语义相反, 切换时不可沿用
+    c.gateway.access.xuids = mode === 'whitelist'
+      ? [xuid]
+      : [...new Set([...(c.gateway.access.xuids || []), xuid])]
     api('/api/config', 'PUT', c)
       .then(() => { toast('已拉黑'); refresh() })
       .catch(e => toast(e.message, true))

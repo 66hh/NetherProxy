@@ -10,8 +10,9 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"slices"
 	"strconv"
+	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -55,7 +56,7 @@ type Gateway struct {
 	srv    *http.Server
 	prober *bdsProber
 	stats  *statsSampler
-	dualLn net.Listener // dual 模式的底层 TCP listener (Shutdown 时显式关闭)
+	dualLn atomic.Pointer[net.Listener] // dual 模式的底层 TCP listener (Shutdown 时显式关闭)
 }
 
 // New 创建网关服务, 监听地址/TLS/metrics 开关取启动时配置, 之后重载不生效
@@ -164,7 +165,7 @@ func (g *Gateway) startDual(cfg conf.GatewayConf) error {
 	if err != nil {
 		return fmt.Errorf("gateway listen: %w", err)
 	}
-	g.dualLn = ln
+	g.dualLn.Store(&ln)
 	plainLn, tlsLn := splitDualListener(ln, tlsCfg)
 	logger.Info("gateway listening (dual http/https)", "addr", ln.Addr(), "cert", cfg.TLS.Cert)
 
@@ -178,8 +179,8 @@ func (g *Gateway) startDual(cfg conf.GatewayConf) error {
 func (g *Gateway) Shutdown(ctx context.Context) error {
 	g.prober.close()
 	g.stats.close()
-	if g.dualLn != nil {
-		_ = g.dualLn.Close() // 释放底层监听 (Shutdown 只管 chanListener)
+	if ln := g.dualLn.Load(); ln != nil {
+		_ = (*ln).Close() // 释放底层监听 (Shutdown 只管 chanListener)
 	}
 	return g.srv.Shutdown(ctx)
 }
@@ -199,14 +200,15 @@ func accessLog() gin.HandlerFunc {
 	}
 }
 
-// apiAuth 管理 API 认证中间件: api_auth_exempt 列表内的路由 (按路由模板匹配)
-// 直接放行, 其余校验 Authorization: Bearer <gateway.token>。
+// apiAuth 管理 API 认证中间件: api_auth_exempt 列表内的路由放行,
+// 其余校验 Authorization: Bearer <gateway.token>。
+// 豁免条目支持 "GET /api/healthz" (仅该方法) 或 "/api/healthz" (全部方法)。
 // 豁免列表与 token 每次请求从配置中心读取, 热更即时生效;
 // 使用常量时间比较防止时序攻击。
 func apiAuth(store *conf.Store) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		cfg := store.Get().Gateway
-		if slices.Contains(cfg.APIAuthExempt, c.FullPath()) {
+		if apiExempt(cfg.APIAuthExempt, c.Request.Method, c.FullPath()) {
 			c.Next()
 			return
 		}
@@ -217,6 +219,24 @@ func apiAuth(store *conf.Store) gin.HandlerFunc {
 		}
 		c.Next()
 	}
+}
+
+// apiExempt 判定路由是否豁免: 条目 "METHOD /path" 仅匹配该方法,
+// "/path" 匹配全部方法 (按路由模板匹配)
+func apiExempt(exempt []string, method, route string) bool {
+	for _, e := range exempt {
+		m, p, found := strings.Cut(e, " ")
+		if found {
+			if strings.EqualFold(m, method) && p == route {
+				return true
+			}
+			continue
+		}
+		if e == route {
+			return true
+		}
+	}
+	return false
 }
 
 // collectMetrics 指标收集中间件, path 标签使用路由模板以避免高基数

@@ -18,17 +18,23 @@ type LogEntry struct {
 
 var logBuf = &ringBuffer{capacity: 1000}
 
-// SetBufSize 调整内存日志缓冲容量
+// SetBufSize 调整内存日志缓冲容量, 缩容时立即裁剪存量
 func SetBufSize(n int) {
 	if n > 0 {
 		logBuf.mu.Lock()
 		logBuf.capacity = n
+		if len(logBuf.buf) > n {
+			logBuf.buf = logBuf.buf[len(logBuf.buf)-n:]
+		}
 		logBuf.mu.Unlock()
 	}
 }
 
 // TailLog 返回最近 n 条不小于 minLevel 的日志 (按时间正序)
 func TailLog(n int, minLevel string) []LogEntry {
+	if n <= 0 {
+		return nil
+	}
 	min := parseLevel(minLevel)
 	logBuf.mu.RLock()
 	defer logBuf.mu.RUnlock()
@@ -79,27 +85,34 @@ func (r *ringBuffer) append(e LogEntry) {
 // bufHandler 包装 slog.Handler, 同时写入内存缓冲
 type bufHandler struct {
 	slog.Handler
+	attrs []slog.Attr // WithAttrs 绑定的属性 (Handle 时一并写入缓冲)
 }
 
-// WithAttrs 保持缓冲包装, 防止派生 logger 绕过内存缓冲
+// WithAttrs 保持缓冲包装并累积绑定属性, 防止派生 logger 绕过内存缓冲
 func (h bufHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	return bufHandler{h.Handler.WithAttrs(attrs)}
+	return bufHandler{h.Handler.WithAttrs(attrs), append(h.attrs, attrs...)}
 }
 
 // WithGroup 保持缓冲包装
 func (h bufHandler) WithGroup(name string) slog.Handler {
-	return bufHandler{h.Handler.WithGroup(name)}
+	return bufHandler{h.Handler.WithGroup(name), h.attrs}
 }
 
 func (h bufHandler) Handle(ctx context.Context, r slog.Record) error {
 	var sb strings.Builder
-	r.Attrs(func(a slog.Attr) bool {
+	writeAttr := func(a slog.Attr) {
 		if sb.Len() > 0 {
 			sb.WriteByte(' ')
 		}
 		sb.WriteString(a.Key)
 		sb.WriteByte('=')
 		sb.WriteString(a.Value.String())
+	}
+	for _, a := range h.attrs {
+		writeAttr(a)
+	}
+	r.Attrs(func(a slog.Attr) bool {
+		writeAttr(a)
 		return true
 	})
 	logBuf.append(LogEntry{Time: r.Time, Level: r.Level.String(), Msg: r.Message, Attrs: sb.String()})

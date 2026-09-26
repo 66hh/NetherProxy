@@ -149,11 +149,7 @@ func (t *EntryTracker) load() {
 		v.unresponsive = false
 		v.Healthy = true
 		t.stats[k] = &v
-		if v.Healthy {
-			entryHealthy.WithLabelValues(k).Set(1)
-		} else {
-			entryHealthy.WithLabelValues(k).Set(0)
-		}
+		entryHealthy.WithLabelValues(k).Set(1)
 		entryHeartbeatRTT.WithLabelValues(k).Set(v.LastRTTMs / 1000)
 	}
 }
@@ -218,11 +214,20 @@ func (t *EntryTracker) flush() {
 	tmp := t.path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0644); err != nil {
 		logger.Error("write entry stats failed", "path", t.path, "err", err)
+		t.reDirty()
 		return
 	}
 	if err := os.Rename(tmp, t.path); err != nil {
 		logger.Error("replace entry stats failed", "path", t.path, "err", err)
+		t.reDirty()
 	}
+}
+
+// reDirty 写失败后重新置脏, 下个 tick 重试
+func (t *EntryTracker) reDirty() {
+	t.mu.Lock()
+	t.dirty = true
+	t.mu.Unlock()
 }
 
 // statsHistorySize 返回配置的状态历史上限
@@ -413,6 +418,10 @@ func (h *Heartbeat) reconcile(ctx context.Context) {
 		}
 		if w.entry != e {
 			delete(h.workers, key)
+			// 锁内先标记停止, 旧 worker 在途探测立即丢弃, 不与新 worker 双份探测
+			w.mu.Lock()
+			w.isStopped = true
+			w.mu.Unlock()
 			toStop = append(toStop, w)
 			nw := newHBWorker(key, e, h.tracker)
 			h.workers[key] = nw
@@ -516,8 +525,14 @@ func (w *hbWorker) probeOnce(hb conf.HeartbeatConf) {
 		return
 	}
 	w.mu.Lock()
+	stopped := w.isStopped
 	w.conn = conn
 	w.mu.Unlock()
+	if stopped {
+		// stop 已执行, 自行关闭避免泄漏
+		_ = conn.Close()
+		return
+	}
 	defer func() {
 		w.mu.Lock()
 		w.conn = nil

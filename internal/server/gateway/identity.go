@@ -42,9 +42,8 @@ func newIdentityVerifier() *identityVerifier {
 		client: &http.Client{Timeout: 10 * time.Second},
 		keys:   make(map[string]*rsa.PublicKey),
 	}
-	if err := v.fetchKeys(); err != nil {
-		logger.Error("initial JWKS fetch failed, identity verification will reject until keys are available", "err", err)
-	}
+	// 初始拉取放后台: 不阻塞启动, 失败按退避自动重试
+	go v.fetchKeys()
 	return v
 }
 
@@ -195,22 +194,20 @@ func (v *identityVerifier) publicKey(kid string) (*rsa.PublicKey, error) {
 	return nil, fmt.Errorf("%w: unknown signing key", errIdentityRejected)
 }
 
-// fetchKeys 拉取 JWKS (加锁外壳)
+// fetchKeys 拉取 JWKS: 网络请求在锁外执行, 仅在替换缓存时短暂持锁
 func (v *identityVerifier) fetchKeys() error {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	return v.fetchKeysLocked()
-}
-
-// fetchKeysLocked 拉取 JWKS 并替换缓存。调用者须持有写锁。
-func (v *identityVerifier) fetchKeysLocked() error {
-	v.lastFetch = time.Now()
 	resp, err := v.client.Get(jwksURL)
 	if err != nil {
+		v.mu.Lock()
+		v.lastFetch = time.Now()
+		v.mu.Unlock()
 		return err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		v.mu.Lock()
+		v.lastFetch = time.Now()
+		v.mu.Unlock()
 		return fmt.Errorf("jwks returned %d", resp.StatusCode)
 	}
 	var jwks struct {
@@ -223,6 +220,9 @@ func (v *identityVerifier) fetchKeysLocked() error {
 		} `json:"keys"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&jwks); err != nil {
+		v.mu.Lock()
+		v.lastFetch = time.Now()
+		v.mu.Unlock()
 		return err
 	}
 	keys := make(map[string]*rsa.PublicKey, len(jwks.Keys))
@@ -244,9 +244,15 @@ func (v *identityVerifier) fetchKeysLocked() error {
 		}
 	}
 	if len(keys) == 0 {
+		v.mu.Lock()
+		v.lastFetch = time.Now()
+		v.mu.Unlock()
 		return errors.New("jwks contains no usable RSA keys")
 	}
+	v.mu.Lock()
 	v.keys = keys
+	v.lastFetch = time.Now()
+	v.mu.Unlock()
 	logger.Info("jwks refreshed", "keys", len(keys))
 	return nil
 }

@@ -34,14 +34,15 @@ func (s *Store) Path() string {
 	return s.path
 }
 
-// Reload 从配置文件重新加载, 加载或校验失败时保留当前配置不变
-func (s *Store) Reload() error {
+// Reload 从配置文件重新加载, 加载或校验失败时保留当前配置不变;
+// 返回重载前的旧配置 (供调用方对比)
+func (s *Store) Reload() (old *Conf, err error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	old := s.Get()
+	old = s.Get()
 	cfg, err := Load(s.path)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	s.mu.Lock()
 	s.cfg = cfg
@@ -50,7 +51,7 @@ func (s *Store) Reload() error {
 	if cfg.Gateway.Token != old.Gateway.Token {
 		logger.Warn("gateway token changed after reload, previously distributed credentials are now invalid")
 	}
-	return nil
+	return old, nil
 }
 
 // Write 校验并保存配置到文件, 保存成功后立即生效; 任一环节失败当前配置不变

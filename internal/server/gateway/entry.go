@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/netip"
 	"sync"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -112,22 +113,51 @@ func (b *entryBalancer) Snapshot() map[string]int {
 	return out
 }
 
-// resolveEntryIP 将线路主机解析为 IP: 本身是 IP 直接用, 域名走 DNS 解析 (优先 IPv4)
+// dnsCache DNS 解析短时缓存
+var dnsCache sync.Map // host -> *dnsCacheEnt
+
+type dnsCacheEnt struct {
+	ip      netip.Addr
+	expires time.Time
+	err     error
+}
+
+// dnsCacheTTL DNS 结果缓存时长
+const dnsCacheTTL = 30 * time.Second
+
+// resolveEntryIP 将线路主机解析为 IP: 本身是 IP 直接用, 域名走 DNS 解析
+// (优先 IPv4, 5s 超时, 30s 缓存防止热路径被 DNS 抖动拖慢)
 func resolveEntryIP(host string) (netip.Addr, error) {
 	if ip, err := netip.ParseAddr(host); err == nil {
 		return ip, nil
 	}
-	ips, err := net.DefaultResolver.LookupNetIP(context.Background(), "ip", host)
+	if ent, ok := dnsCache.Load(host); ok {
+		e := ent.(*dnsCacheEnt)
+		if time.Now().Before(e.expires) {
+			return e.ip, e.err
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ips, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
 	if err != nil {
 		return netip.Addr{}, err
 	}
-	for _, ip := range ips {
-		if ip.Is4() {
-			return ip, nil
+	var ip netip.Addr
+	for _, a := range ips {
+		if a.Is4() {
+			ip = a
+			break
 		}
 	}
-	if len(ips) > 0 {
-		return ips[0], nil
+	if !ip.IsValid() {
+		if len(ips) > 0 {
+			ip = ips[0]
+		} else {
+			err = errors.New("no address resolved for entry host")
+			return netip.Addr{}, err
+		}
 	}
-	return netip.Addr{}, errors.New("no address resolved for entry host")
+	dnsCache.Store(host, &dnsCacheEnt{ip: ip, expires: time.Now().Add(dnsCacheTTL)})
+	return ip, nil
 }

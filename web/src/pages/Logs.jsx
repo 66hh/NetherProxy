@@ -11,10 +11,13 @@ export default function Logs() {
   const boxRef = useRef(null)
 
   useEffect(() => {
-    const load = () => api(`/api/log?tail=300&level=${level}`).then(d => setLogs(d.logs || [])).catch(() => {})
+    let stale = false
+    const load = () => api(`/api/log?tail=300&level=${level}`)
+      .then(d => { if (!stale) setLogs(d.logs || []) })
+      .catch(() => {})
     load()
     const t = setInterval(load, 2000)
-    return () => clearInterval(t)
+    return () => { stale = true; clearInterval(t) }
   }, [level])
 
   useEffect(() => {

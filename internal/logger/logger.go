@@ -33,7 +33,7 @@ func Init(level string, format string, w io.Writer) {
 	} else {
 		handler = slog.NewTextHandler(w, opts)
 	}
-	l := slog.New(bufHandler{handler})
+	l := slog.New(bufHandler{Handler: handler})
 	global.Store(l)
 	slog.SetDefault(l)
 }

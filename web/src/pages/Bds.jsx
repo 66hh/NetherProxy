@@ -23,9 +23,16 @@ export default function Bds() {
   }, [])
 
   function save() {
+    if (!cfg) { toast('配置加载中, 请稍后', true); return }
     const c = JSON.parse(JSON.stringify(cfg))
-    if (editing.index >= 0) c.bds[editing.index] = editing.data
-    else c.bds.push(editing.data)
+    c.bds = c.bds || []
+    let idx = editing.index
+    if (idx >= 0) {
+      // 保存时按 key 重新定位, 防止弹窗期间配置被外部修改导致错位覆盖
+      idx = findIdx(c.bds, editing.key)
+      if (idx < 0) { toast('该条目已被删除, 保存取消', true); setEditing(null); return }
+      c.bds[idx] = editing.data
+    } else c.bds.push(editing.data)
     api('/api/config', 'PUT', c)
       .then(r => { toast('已保存' + (r.restart_required ? ' (部分变更需重启生效)' : '')); setEditing(null); refresh(); load() })
       .catch(e => toast(e.message, true))
@@ -37,7 +44,7 @@ export default function Bds() {
     if (!cfg) { toast('配置加载中, 请稍后', true); return }
     const idx = findIdx(cfg.bds, key)
     if (idx < 0) { toast('配置已变化, 请重试', true); refresh(); return }
-    setEditing({ index: idx, data: JSON.parse(JSON.stringify(cfg.bds[idx])) })
+    setEditing({ index: idx, key, data: JSON.parse(JSON.stringify(cfg.bds[idx])) })
   }
 
   function del(key) {
@@ -54,7 +61,7 @@ export default function Bds() {
   return (
     <>
       <div style={{ marginBottom: 12 }}>
-        <button className="btn primary" onClick={() => setEditing({ index: -1, data: emptyBds() })}>新增 BDS</button>
+        <button className="btn primary" onClick={() => setEditing({ index: -1, key: '', data: emptyBds() })}>新增 BDS</button>
       </div>
       {list.map((b, i) => (
         <div className="card" key={b.key + b.domain}>

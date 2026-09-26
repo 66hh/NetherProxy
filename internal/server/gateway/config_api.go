@@ -57,8 +57,8 @@ func handleWriteConfig(store *conf.Store) gin.HandlerFunc {
 
 func handleReloadConfig(store *conf.Store) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		old := store.Get()
-		if err := store.Reload(); err != nil {
+		old, err := store.Reload()
+		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "reload failed", "details": err.Error()})
 			return
 		}

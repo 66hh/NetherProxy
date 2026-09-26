@@ -101,7 +101,10 @@ export default function Config() {
               if (type === 'bool') return <BoolField key={key} id={id} label={label} value={!!v} />
               if (type === 'select') return (
                 <Field key={key} label={label}>
-                  <select id={id} defaultValue={v}>{opts.map(o => <option key={o} value={o}>{o}</option>)}</select>
+                  <select id={id} defaultValue={v}>
+                    {!opts.includes(v) && <option value={v}>{String(v)} (非法值)</option>}
+                    {opts.map(o => <option key={o} value={o}>{o}</option>)}
+                  </select>
                 </Field>)
               if (type === 'number') return <Field key={key} label={label}><input type="number" id={id} defaultValue={v} /></Field>
               if (type === 'list') return <Field key={key} label={label}><textarea id={id} rows={3} defaultValue={(v || []).join('\n')} /></Field>

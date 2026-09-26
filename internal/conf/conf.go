@@ -55,7 +55,7 @@ type RateLimitConf struct {
 	Enable   bool   `yaml:"enable" json:"enable"`       // 是否启用
 	Interval string `yaml:"interval" json:"interval"`   // 窗口长度, 如 "60s"
 	MaxJoins int    `yaml:"max_joins" json:"max_joins"` // 每窗口每 XUID 最大 join 次数
-	MaxKeys  int    `yaml:"max_keys" json:"max_keys"`   // 跟踪的最大 key 数, 超过整体重置 (防伪造 XUID 撑大内存), 0 用默认 1000
+	MaxKeys  int    `yaml:"max_keys" json:"max_keys"`   // 跟踪的最大 key 数, 满时优先淘汰过期条目, 仍满则拒绝新 key; 0 用默认 1000
 }
 
 // 网关服务器配置
@@ -263,6 +263,16 @@ func (c *Conf) Validate() error {
 	if c.Gateway.Token == MaskedToken {
 		errs = append(errs, errors.New("gateway.token: must not be the masked placeholder"))
 	}
+	// 写操作路由禁止豁免认证
+	for _, route := range c.Gateway.APIAuthExempt {
+		p := route
+		if _, rest, found := strings.Cut(route, " "); found {
+			p = rest
+		}
+		if p == "/api/config" || strings.HasPrefix(p, "/api/session/") {
+			errs = append(errs, fmt.Errorf("gateway.api_auth_exempt: write-capable route %q must not be exempt", route))
+		}
+	}
 
 	switch c.Gateway.Access.Mode {
 	case "", "off", "blacklist", "whitelist":
@@ -395,6 +405,9 @@ func checkHeartbeat(field string, hb HeartbeatConf) error {
 	}
 	if hb.Retries < 1 {
 		return fmt.Errorf("%s.retries: must be >= 1", field)
+	}
+	if hb.TimeoutDuration() >= hb.IntervalDuration() {
+		return fmt.Errorf("%s.timeout: must be less than interval", field)
 	}
 	return nil
 }

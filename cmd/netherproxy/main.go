@@ -81,7 +81,7 @@ func main() {
 	if cfg.Gateway.TLS.Enable {
 		scheme = "https"
 	}
-	logger.Info("web panel ready", "url", fmt.Sprintf("%s://%s:%d/", scheme, panelHost, cfg.Gateway.Port))
+	logger.Info("web panel starting", "url", fmt.Sprintf("%s://%s:%d/", scheme, panelHost, cfg.Gateway.Port))
 	// token 只打印到控制台, 不进日志缓冲 (面板日志页可见日志缓冲)
 	fmt.Printf("gateway token: %s\n", cfg.Gateway.Token)
 
@@ -98,17 +98,18 @@ func main() {
 	select {
 	case sig := <-quit:
 		logger.Info("shutdown signal received", "signal", sig.String())
+		// 仅在收到第一次信号后才监听第二次信号强制退出
+		go func() {
+			<-quit
+			logger.Warn("second signal received, forcing exit")
+			os.Exit(1)
+		}()
 	case err := <-errCh:
 		if err != nil {
 			logger.Error("gateway stopped with error", "err", err)
 			serveErr = err
 		}
 	}
-	go func() {
-		<-quit
-		logger.Warn("second signal received, forcing exit")
-		os.Exit(1)
-	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

@@ -122,9 +122,16 @@ func (r *rateLimiter) allow(key string, cfg conf.RateLimitConf) bool {
 
 	if len(r.hits) >= maxKeys {
 		if _, exists := r.hits[key]; !exists {
-			// 容量满且是新 key: 拒绝, 防止伪造 key 冲掉全部现有窗口
-			logger.Warn("rate limiter full, rejecting new key", "key", key, "max_keys", maxKeys)
-			return false
+			// 满容量时先淘汰已过期条目, 仍满才拒绝新 key
+			for k, h := range r.hits {
+				if now.Sub(h.windowStart) >= interval {
+					delete(r.hits, k)
+				}
+			}
+			if len(r.hits) >= maxKeys {
+				logger.Warn("rate limiter full, rejecting new key", "key", key, "max_keys", maxKeys)
+				return false
+			}
 		}
 	}
 

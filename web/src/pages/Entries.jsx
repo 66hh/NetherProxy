@@ -23,21 +23,30 @@ export default function Entries() {
   }, [])
 
   function save() {
+    if (!cfg) { toast('配置加载中, 请稍后', true); return }
     const c = JSON.parse(JSON.stringify(cfg))
-    if (editing.index >= 0) c.entry[editing.index] = editing.data
-    else c.entry.push(editing.data)
+    c.entry = c.entry || []
+    let idx = editing.index
+    if (idx >= 0) {
+      // 保存时按 key 重新定位, 防止弹窗期间配置被外部修改导致错位覆盖
+      idx = findIdx(c.entry, editing.key)
+      if (idx < 0) { toast('该条目已被删除, 保存取消', true); setEditing(null); return }
+      c.entry[idx] = editing.data
+    } else c.entry.push(editing.data)
     api('/api/config', 'PUT', c)
       .then(r => { toast('已保存' + (r.restart_required ? ' (部分变更需重启生效)' : '')); setEditing(null); refresh(); load() })
       .catch(e => toast(e.message, true))
   }
 
-  function findIdx(list, key) { return (list || []).findIndex(e => e.host + ':' + e.port === key) }
+  function findIdx(list, key) {
+    return (list || []).findIndex(e => (e.host.includes(':') ? `[${e.host}]:${e.port}` : `${e.host}:${e.port}`) === key)
+  }
 
   function openEdit(key) {
     if (!cfg) { toast('配置加载中, 请稍后', true); return }
     const idx = findIdx(cfg.entry, key)
     if (idx < 0) { toast('配置已变化, 请重试', true); refresh(); return }
-    setEditing({ index: idx, data: JSON.parse(JSON.stringify(cfg.entry[idx])) })
+    setEditing({ index: idx, key, data: JSON.parse(JSON.stringify(cfg.entry[idx])) })
   }
 
   function del(key) {
@@ -54,7 +63,7 @@ export default function Entries() {
   return (
     <>
       <div style={{ marginBottom: 12 }}>
-        <button className="btn primary" onClick={() => setEditing({ index: -1, data: emptyEntry() })}>新增线路</button>
+        <button className="btn primary" onClick={() => setEditing({ index: -1, key: '', data: emptyEntry() })}>新增线路</button>
       </div>
       {entries.map((e, i) => (
         <div className="card" key={e.key}>

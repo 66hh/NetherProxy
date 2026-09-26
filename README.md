@@ -44,6 +44,48 @@ level=INFO msg="multiplexer listening" addr=0.0.0.0:19131
 
 客户端添加服务器地址填 `网关主机:网关端口`。
 
+## 构建
+
+### 环境要求
+
+- Go 1.27 及以上
+- Node.js 18 及以上（仅修改前端时需要）
+
+### 仅构建后端
+
+前端构建产物已随仓库提交（`internal/server/gateway/web/index.html`），不改前端时直接编译即可：
+
+```bash
+go build -o netherproxy.exe ./cmd/netherproxy
+```
+
+### 修改前端后重新构建
+
+```bash
+cd web
+npm install        # 首次
+npm run build      # 产物自动输出到 internal/server/gateway/web/
+cd ..
+go build -o netherproxy.exe ./cmd/netherproxy
+```
+
+### 前端开发调试
+
+```bash
+cd web
+npm run dev        # vite 开发服务器, /api 自动代理到 127.0.0.1:19130
+```
+
+### 跨平台编译
+
+```bash
+# Linux
+GOOS=linux GOARCH=amd64 go build -o netherproxy ./cmd/netherproxy
+
+# macOS (ARM)
+GOOS=darwin GOARCH=arm64 go build -o netherproxy ./cmd/netherproxy
+```
+
 ## 文档
 
 - [配置说明](docs/config.md)：全部配置字段、默认值与热更行为

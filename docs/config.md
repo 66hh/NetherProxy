@@ -102,6 +102,13 @@ entry:
 - 均衡策略：最少活跃会话数优先，跳过已满/心跳下线的线路
 - 心跳统计持久化到 `entry_stats.json`，经 `GET /api/entry` 与 Prometheus 暴露
 
+## stats — 统计
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `status_history_size` | `500` | 每条线路/BDS 保留的探测历史上限 |
+| `flush_interval` | `30s` | 统计落盘合并间隔；状态变化立即落盘 |
+
 ## session — 会话超时（热更）
 
 | 字段 | 默认 | 说明 |

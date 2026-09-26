@@ -52,7 +52,10 @@ const SCHEMA = [
     ['session.idle_reap_timeout', '空闲回收', 'text'],
     ['session.tuple_stale_timeout', '5-tuple 软状态', 'text'],
   ]},
-  { group: '统计', fields: [['stats.status_history_size', '状态历史上限', 'number']]},
+  { group: '统计', fields: [
+    ['stats.status_history_size', '状态历史上限', 'number'],
+    ['stats.flush_interval', '落盘合并间隔 (如 30s)', 'text'],
+  ]},
 ]
 
 function getPath(o, p) { return p.split('.').reduce((a, k) => (a == null ? a : a[k]), o) }

@@ -189,7 +189,8 @@ type LogConf struct {
 
 // 统计配置
 type StatsConf struct {
-	StatusHistorySize int `yaml:"status_history_size" json:"status_history_size"` // 每条线路/BDS 保留的状态变化历史上限, 0 用默认 500
+	StatusHistorySize int    `yaml:"status_history_size" json:"status_history_size"` // 每条线路/BDS 保留的状态变化历史上限, 0 用默认 500
+	FlushInterval     string `yaml:"flush_interval" json:"flush_interval"`           // 统计落盘合并间隔, 如 "30s"; 状态变化立即落盘
 }
 
 type Conf struct {
@@ -364,6 +365,9 @@ func (c *Conf) Validate() error {
 
 	if c.Stats.StatusHistorySize < 0 {
 		errs = append(errs, errors.New("stats.status_history_size: must not be negative"))
+	}
+	if d, err := time.ParseDuration(c.Stats.FlushInterval); err != nil || d <= 0 {
+		errs = append(errs, fmt.Errorf("stats.flush_interval: invalid duration %q", c.Stats.FlushInterval))
 	}
 
 	return errors.Join(errs...)

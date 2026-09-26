@@ -105,8 +105,10 @@ type EntryTracker struct {
 	mu    sync.RWMutex
 	stats map[string]*EntryStats
 
-	path  string // 统计持久化文件路径
-	dirty bool   // 有待落盘的变更
+	path      string // 统计持久化文件路径
+	dirty     bool   // 有待落盘的变更
+	urgent    bool   // 状态变化等关键变更, 立即落盘
+	lastFlush time.Time
 
 	cancel context.CancelFunc
 	done   chan struct{}
@@ -156,22 +158,38 @@ func (t *EntryTracker) load() {
 	}
 }
 
-// markDirty 标记有待落盘的变更。调用者须持有锁。
+// markDirty 标记有待落盘的变更 (30s 合并落盘)。调用者须持有锁。
 func (t *EntryTracker) markDirty() {
 	t.dirty = true
 }
 
-// flushLoop 周期性将变更落盘 (合并高频更新)
+// markUrgent 标记关键变更 (状态切换等), 立即落盘。调用者须持有锁。
+func (t *EntryTracker) markUrgent() {
+	t.dirty = true
+	t.urgent = true
+}
+
+// flushLoop 周期性将变更落盘: 状态变化等关键变更立即写,
+// 纯计数变更 30 秒合并一次, 避免高频重写文件
 func (t *EntryTracker) flushLoop(ctx context.Context) {
 	defer close(t.done)
-	ticker := time.NewTicker(2 * time.Second)
+	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			t.flush()
+			interval, err := time.ParseDuration(t.store.Get().Stats.FlushInterval)
+			if err != nil || interval <= 0 {
+				interval = 30 * time.Second
+			}
+			t.mu.Lock()
+			need := t.dirty && (t.urgent || time.Since(t.lastFlush) > interval)
+			t.mu.Unlock()
+			if need {
+				t.flush()
+			}
 		}
 	}
 }
@@ -184,6 +202,8 @@ func (t *EntryTracker) flush() {
 		return
 	}
 	t.dirty = false
+	t.urgent = false
+	t.lastFlush = time.Now()
 	snap := make(map[string]EntryStats, len(t.stats))
 	for k, s := range t.stats {
 		snap[k] = *s
@@ -253,6 +273,7 @@ func (t *EntryTracker) Record(key string, rtt time.Duration, probeErr error, man
 			if !manualOnly && s.Healthy {
 				s.Healthy = false
 				s.LastChange = time.Now()
+				t.markUrgent()
 				entryHealthy.WithLabelValues(key).Set(0)
 			}
 			logger.Error("entry unresponsive", "entry", key,
@@ -274,6 +295,7 @@ func (t *EntryTracker) Record(key string, rtt time.Duration, probeErr error, man
 	if !s.Healthy {
 		s.Healthy = true
 		s.LastChange = time.Now()
+		t.markUrgent()
 		entryHealthy.WithLabelValues(key).Set(1)
 		logger.Info("entry back online", "entry", key)
 	}

@@ -55,6 +55,7 @@ func Default() *Conf {
 		},
 		Stats: StatsConf{
 			StatusHistorySize: 500,
+			FlushInterval:     "30s",
 		},
 		Session: SessionConf{
 			SignaledTimeout:   "30s",
@@ -120,6 +121,9 @@ func normalize(c *Conf) {
 	// 其他标量缺省
 	if c.Gateway.MotdCache == "" {
 		c.Gateway.MotdCache = "0s"
+	}
+	if c.Stats.FlushInterval == "" {
+		c.Stats.FlushInterval = "30s"
 	}
 }
 

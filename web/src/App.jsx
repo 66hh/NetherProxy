@@ -8,12 +8,13 @@ import Config from './pages/Config'
 import Logs from './pages/Logs'
 
 export const ToastCtx = React.createContext(() => {})
-export const ConfigCtx = React.createContext({ cfg: null, refresh: () => {} })
+export const ConfigCtx = React.createContext({ cfg: null, version: 0, refresh: () => {} })
 
 export default function App() {
   const [authed, setAuthed] = useState(false)
   const [tab, setTab] = useState('dashboard')
   const [cfg, setCfg] = useState(null)
+  const [cfgVersion, setCfgVersion] = useState(0)
   const [toastMsg, setToastMsg] = useState(null)
 
   const toast = useCallback((msg, isErr) => {
@@ -22,7 +23,7 @@ export default function App() {
   }, [])
 
   const refresh = useCallback(() =>
-    api('/api/config').then(c => setCfg(c)).catch(e => toast(e.message, true)), [toast])
+    api('/api/config').then(c => { setCfg(c); setCfgVersion(v => v + 1) }).catch(e => toast(e.message, true)), [toast])
 
   useEffect(() => {
     if (!getToken()) return
@@ -57,7 +58,7 @@ export default function App() {
   const tabs = [['dashboard', '概览'], ['sessions', '会话'], ['entries', '线路'], ['bds', 'BDS'], ['logs', '日志'], ['config', '配置']]
   return (
     <ToastCtx.Provider value={toast}>
-      <ConfigCtx.Provider value={{ cfg, refresh }}>
+      <ConfigCtx.Provider value={{ cfg, version: cfgVersion, refresh }}>
         <header>
           <h1>NetherProxy</h1>
           <span className="spacer"></span>

@@ -63,7 +63,7 @@ function setPath(o, p, v) { const ks = p.split('.'); const last = ks.pop(); ks.r
 
 export default function Config() {
   const toast = useContext(ToastCtx)
-  const { cfg, refresh } = useContext(ConfigCtx)
+  const { cfg, version, refresh } = useContext(ConfigCtx)
 
   if (!cfg) return <div className="card">加载中...</div>
 
@@ -90,7 +90,7 @@ export default function Config() {
   }
 
   return (
-    <>
+    <div key={version}>
       {SCHEMA.map(g => (
         <div className="card" key={g.group}>
           <h3>{g.group}</h3>
@@ -114,7 +114,7 @@ export default function Config() {
         <button className="btn primary" onClick={save}>保存配置</button>
         <button className="btn" onClick={reload}>从文件重载</button>
       </div>
-    </>
+    </div>
   )
 }
 

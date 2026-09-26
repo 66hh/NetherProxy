@@ -260,6 +260,9 @@ func (c *Conf) Validate() error {
 	if c.Gateway.Token == "" {
 		errs = append(errs, errors.New("gateway.token: must not be empty"))
 	}
+	if c.Gateway.Token == MaskedToken {
+		errs = append(errs, errors.New("gateway.token: must not be the masked placeholder"))
+	}
 
 	switch c.Gateway.Access.Mode {
 	case "", "off", "blacklist", "whitelist":
@@ -385,8 +388,10 @@ func checkHeartbeat(field string, hb HeartbeatConf) error {
 	if _, err := time.ParseDuration(hb.Interval); err != nil || hb.IntervalDuration() <= 0 {
 		return fmt.Errorf("%s.interval: invalid duration %q", field, hb.Interval)
 	}
-	if _, err := time.ParseDuration(hb.Timeout); err != nil || hb.TimeoutDuration() <= 0 {
+	if d, err := time.ParseDuration(hb.Timeout); err != nil || d <= 0 {
 		return fmt.Errorf("%s.timeout: invalid duration %q", field, hb.Timeout)
+	} else if d > 30*time.Second {
+		return fmt.Errorf("%s.timeout: must not exceed 30s", field)
 	}
 	if hb.Retries < 1 {
 		return fmt.Errorf("%s.retries: must be >= 1", field)

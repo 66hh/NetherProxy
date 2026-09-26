@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { api, getToken, setToken } from './api'
 import Dashboard from './pages/Dashboard'
 import Sessions from './pages/Sessions'
@@ -17,9 +17,11 @@ export default function App() {
   const [cfgVersion, setCfgVersion] = useState(0)
   const [toastMsg, setToastMsg] = useState(null)
 
+  const toastTimer = useRef(null)
   const toast = useCallback((msg, isErr) => {
+    clearTimeout(toastTimer.current)
     setToastMsg({ msg, isErr })
-    setTimeout(() => setToastMsg(null), 3000)
+    toastTimer.current = setTimeout(() => setToastMsg(null), 3000)
   }, [])
 
   const refresh = useCallback(() =>
@@ -41,7 +43,7 @@ export default function App() {
             e.preventDefault()
             const t = e.target.token.value.trim()
             setToken(t)
-            api('/api/session')
+            api('/api/session', 'GET', undefined, { noRedirect: true })
               .then(() => { setAuthed(true); refresh() })
               .catch(() => { setToken(''); toast('令牌无效', true) })
           }}>

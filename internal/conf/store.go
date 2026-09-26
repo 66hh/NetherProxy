@@ -7,6 +7,9 @@ import (
 	"NetherProxy/internal/logger"
 )
 
+// MaskedToken 是 token 在读取接口中的脱敏占位值
+const MaskedToken = "***"
+
 // Store 持有当前生效配置, 支持并发读取与原子替换 (reload/write)
 type Store struct {
 	mu      sync.RWMutex
@@ -54,6 +57,27 @@ func (s *Store) Reload() error {
 func (s *Store) Write(cfg *Conf) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
+	return s.writeLocked(cfg)
+}
+
+// WriteMasked 处理面板/API 写入: 脱敏 token 回填 + 缺省值填充 +
+// 校验 + 落盘 + 生效, 全程持写锁原子完成, 返回写入前的旧配置
+func (s *Store) WriteMasked(cfg *Conf) (old *Conf, err error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	old = s.Get()
+	if cfg.Gateway.Token == MaskedToken {
+		cfg.Gateway.Token = old.Gateway.Token
+	}
+	if err := s.writeLocked(cfg); err != nil {
+		return nil, err
+	}
+	return old, nil
+}
+
+// writeLocked 校验并写入。调用者须持有 writeMu。
+func (s *Store) writeLocked(cfg *Conf) error {
+	normalize(cfg)
 	if err := cfg.Validate(); err != nil {
 		return fmt.Errorf("validate config: %w", err)
 	}

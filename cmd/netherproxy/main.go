@@ -81,9 +81,9 @@ func main() {
 	if cfg.Gateway.TLS.Enable {
 		scheme = "https"
 	}
-	logger.Info("web panel ready",
-		"url", fmt.Sprintf("%s://%s:%d/", scheme, panelHost, cfg.Gateway.Port),
-		"token", cfg.Gateway.Token)
+	logger.Info("web panel ready", "url", fmt.Sprintf("%s://%s:%d/", scheme, panelHost, cfg.Gateway.Port))
+	// token 只打印到控制台, 不进日志缓冲 (面板日志页可见日志缓冲)
+	fmt.Printf("gateway token: %s\n", cfg.Gateway.Token)
 
 	// gateway 启动错误经 channel 上报, 统一走优雅关闭路径
 	errCh := make(chan error, 1)
@@ -94,12 +94,14 @@ func main() {
 	// 等待退出信号; 第二次信号强制退出
 	quit := make(chan os.Signal, 2)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	var serveErr error
 	select {
 	case sig := <-quit:
 		logger.Info("shutdown signal received", "signal", sig.String())
 	case err := <-errCh:
 		if err != nil {
 			logger.Error("gateway stopped with error", "err", err)
+			serveErr = err
 		}
 	}
 	go func() {
@@ -125,6 +127,11 @@ func main() {
 	tracker.Close()
 
 	logger.Info("NetherProxy stopped")
+
+	// 启动失败以非零码退出, 便于守护进程识别
+	if serveErr != nil {
+		os.Exit(1)
+	}
 }
 
 // fatal 在日志器就绪前输出错误并退出

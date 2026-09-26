@@ -87,13 +87,15 @@ func (t *bdsTracker) healthy(key string) bool {
 	return s == nil || s.Healthy
 }
 
-// snapshot 返回全部统计副本
+// snapshot 返回全部统计副本 (History 深拷贝, 防读写竞态)
 func (t *bdsTracker) snapshot() map[string]bdsStats {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	out := make(map[string]bdsStats, len(t.stats))
 	for k, s := range t.stats {
-		out[k] = *s
+		cp := *s
+		cp.History = append([]bdsProbeEvent(nil), s.History...)
+		out[k] = cp
 	}
 	return out
 }
@@ -312,21 +314,21 @@ func (w *bdsWorker) probeOnce(ctx context.Context, hb conf.HeartbeatConf) {
 	url := fmt.Sprintf("http://%s/v1/join", w.key)
 	req, err := http.NewRequestWithContext(pctx, http.MethodGet, url, nil)
 	if err != nil {
-		w.tracker.record(w.key, 0, err, !hb.ManualOnly, hb.Retries)
+		w.tracker.record(w.key, 0, err, hb.ManualOnly, hb.Retries)
 		return
 	}
 	start := time.Now()
 	resp, err := w.client.Do(req)
 	if err != nil {
-		w.tracker.record(w.key, 0, err, !hb.ManualOnly, hb.Retries)
+		w.tracker.record(w.key, 0, err, hb.ManualOnly, hb.Retries)
 		return
 	}
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		w.tracker.record(w.key, 0, fmt.Errorf("status %d", resp.StatusCode), !hb.ManualOnly, hb.Retries)
+		w.tracker.record(w.key, 0, fmt.Errorf("status %d", resp.StatusCode), hb.ManualOnly, hb.Retries)
 		return
 	}
-	w.tracker.record(w.key, time.Since(start), nil, !hb.ManualOnly, hb.Retries)
+	w.tracker.record(w.key, time.Since(start), nil, hb.ManualOnly, hb.Retries)
 }
 
 // handleBDSStatus 返回各 BDS 的配置、路由状态与健康统计

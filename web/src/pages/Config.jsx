@@ -73,13 +73,13 @@ export default function Config() {
       const el = document.getElementById('cfg-' + key)
       let v
       if (type === 'bool') v = el.checked
-      else if (type === 'number') v = +el.value
+      else if (type === 'number') v = el.value === '' ? getPath(cfg, key) : +el.value // 清空保留原值
       else if (type === 'list') v = el.value.split('\n').map(s => s.trim()).filter(Boolean)
       else v = el.value
       setPath(c, key, v)
     }
     api('/api/config', 'PUT', c)
-      .then(r => toast('已保存' + (r.restart_required ? ' (部分变更需重启生效)' : '')))
+      .then(r => { toast('已保存' + (r.restart_required ? ' (部分变更需重启生效)' : '')); refresh() })
       .catch(e => toast(e.message, true))
   }
 

@@ -34,6 +34,7 @@ type identityVerifier struct {
 	mu        sync.RWMutex
 	keys      map[string]*rsa.PublicKey
 	lastFetch time.Time
+	fetchMu   sync.Mutex // 串行化 JWKS 拉取 (锁外网络请求)
 }
 
 func newIdentityVerifier() *identityVerifier {
@@ -109,6 +110,9 @@ func (v *identityVerifier) verify(offer []byte) (PlayerInfo, error) {
 	if claims.XName == "" {
 		return PlayerInfo{}, fmt.Errorf("%w: missing xname", errIdentityRejected)
 	}
+	if claims.XID == "" {
+		return PlayerInfo{}, fmt.Errorf("%w: missing xid", errIdentityRejected)
+	}
 	return PlayerInfo{Name: claims.XName, XUID: claims.XID}, nil
 }
 
@@ -161,30 +165,27 @@ func extractIdentityToken(offer []byte) (string, error) {
 	return "", fmt.Errorf("%w: missing identity", errIdentityRejected)
 }
 
-// publicKey 按 kid 取公钥, 未命中时刷新 JWKS 重试一次
+// publicKey 按 kid 取公钥, 未命中时刷新 JWKS 重试一次。
+// 网络拉取在锁外进行 (singleflight), 不阻塞其他验签;
+// 缓存为空 (启动失败) 时用短退避, 否则 5 分钟内不重复拉取。
 func (v *identityVerifier) publicKey(kid string) (*rsa.PublicKey, error) {
 	v.mu.RLock()
 	key, ok := v.keys[kid]
+	empty := len(v.keys) == 0
 	v.mu.RUnlock()
 	if ok {
 		return key, nil
 	}
 
-	v.mu.Lock()
-	// 双重检查 + 5 分钟内不重复拉取
-	if key, ok := v.keys[kid]; ok {
-		v.mu.Unlock()
-		return key, nil
+	backoff := 5 * time.Minute
+	if empty {
+		backoff = 10 * time.Second
 	}
-	if time.Since(v.lastFetch) < 5*time.Minute {
-		v.mu.Unlock()
-		return nil, fmt.Errorf("%w: unknown signing key", errIdentityRejected)
+	v.fetchMu.Lock()
+	if time.Since(v.lastFetch) >= backoff {
+		v.fetchKeys() // 内部持写锁, 失败也更新 lastFetch
 	}
-	err := v.fetchKeysLocked()
-	v.mu.Unlock()
-	if err != nil {
-		return nil, fmt.Errorf("refresh jwks: %w", err)
-	}
+	v.fetchMu.Unlock()
 
 	v.mu.RLock()
 	defer v.mu.RUnlock()

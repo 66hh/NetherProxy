@@ -15,6 +15,7 @@
 | `max_backups` | `7` | 旧文件保留数量，0 不限 |
 | `max_age` | `30` | 旧文件保留天数，0 不限 |
 | `compress` | `false` | 轮转后是否 gzip 压缩 |
+| `buffer_size` | `1000` | 内存日志缓冲条数（面板日志查看） |
 
 ## gateway — HTTP 信令/管理网关
 

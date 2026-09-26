@@ -81,6 +81,16 @@ type bufHandler struct {
 	slog.Handler
 }
 
+// WithAttrs 保持缓冲包装, 防止派生 logger 绕过内存缓冲
+func (h bufHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return bufHandler{h.Handler.WithAttrs(attrs)}
+}
+
+// WithGroup 保持缓冲包装
+func (h bufHandler) WithGroup(name string) slog.Handler {
+	return bufHandler{h.Handler.WithGroup(name)}
+}
+
 func (h bufHandler) Handle(ctx context.Context, r slog.Record) error {
 	var sb strings.Builder
 	r.Attrs(func(a slog.Attr) bool {

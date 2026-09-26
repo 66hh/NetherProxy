@@ -31,10 +31,22 @@ export default function Entries() {
       .catch(e => toast(e.message, true))
   }
 
-  function del(i) {
-    if (!confirm('删除线路 ' + entries[i].key + '?')) return
+  function findIdx(list, key) { return (list || []).findIndex(e => e.host + ':' + e.port === key) }
+
+  function openEdit(key) {
+    if (!cfg) { toast('配置加载中, 请稍后', true); return }
+    const idx = findIdx(cfg.entry, key)
+    if (idx < 0) { toast('配置已变化, 请重试', true); refresh(); return }
+    setEditing({ index: idx, data: JSON.parse(JSON.stringify(cfg.entry[idx])) })
+  }
+
+  function del(key) {
+    if (!cfg) { toast('配置加载中, 请稍后', true); return }
+    if (!confirm('删除线路 ' + key + '?')) return
+    const idx = findIdx(cfg.entry, key)
+    if (idx < 0) { toast('配置已变化, 请重试', true); refresh(); return }
     const c = JSON.parse(JSON.stringify(cfg))
-    c.entry.splice(i, 1)
+    c.entry.splice(idx, 1)
     api('/api/config', 'PUT', c).then(() => { toast('已删除'); refresh(); load() }).catch(e => toast(e.message, true))
   }
 
@@ -54,8 +66,8 @@ export default function Entries() {
                   <span>RTT <b>{e.stats.last_rtt_ms}ms</b></span></>
               : <span>心跳未开启</span>}
             <span style={{ flex: 1 }}></span>
-            <button className="btn small" onClick={() => setEditing({ index: i, data: JSON.parse(JSON.stringify(cfg.entry[i])) })}>编辑</button>
-            <button className="btn small danger" onClick={() => del(i)}>删除</button>
+            <button className="btn small" onClick={() => openEdit(e.key)}>编辑</button>
+            <button className="btn small danger" onClick={() => del(e.key)}>删除</button>
           </div>
           <StatusBar stats={e.stats} />
         </div>

@@ -14,6 +14,10 @@ import struct
 import sys
 import urllib.request
 
+# 测试线路地址 (由 run_test.py 经环境变量注入, 对应 multiplexer 监听地址)
+ENTRY_HOST = os.environ.get("NP_ENTRY_HOST", "127.0.0.1")
+ENTRY_PORT = int(os.environ.get("NP_ENTRY_PORT", "19131"))
+
 GATEWAY = "http://127.0.0.1:19130"
 
 # 测试玩家信息 (虚构, 非真实账号)
@@ -121,8 +125,8 @@ def main():
     ufrag, pwd, candidate = parse_answer(answer)
     check("answer has ufrag", ufrag is not None and ufrag.startswith("fakeuf"), f"ufrag={ufrag}")
     check("answer has pwd", pwd is not None)
-    check("candidate rewritten to entry", candidate is not None and candidate[1] != 19511,
-          f"candidate={candidate}")
+    check("candidate rewritten to entry", candidate == (ENTRY_HOST, ENTRY_PORT),
+          f"candidate={candidate}, expect=({ENTRY_HOST}, {ENTRY_PORT})")
 
     if not (ufrag and pwd and candidate):
         print("answer 解析失败, 中止", flush=True)

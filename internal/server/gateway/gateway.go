@@ -55,6 +55,7 @@ type Gateway struct {
 	srv    *http.Server
 	prober *bdsProber
 	stats  *statsSampler
+	dualLn net.Listener // dual 模式的底层 TCP listener (Shutdown 时显式关闭)
 }
 
 // New 创建网关服务, 监听地址/TLS/metrics 开关取启动时配置, 之后重载不生效
@@ -157,11 +158,13 @@ func (g *Gateway) startDual(cfg conf.GatewayConf) error {
 	}
 	tlsCfg := g.srv.TLSConfig.Clone()
 	tlsCfg.Certificates = []tls.Certificate{cert}
+	tlsCfg.NextProtos = []string{"h2", "http/1.1"}
 
 	ln, err := net.Listen("tcp", g.srv.Addr)
 	if err != nil {
 		return fmt.Errorf("gateway listen: %w", err)
 	}
+	g.dualLn = ln
 	plainLn, tlsLn := splitDualListener(ln, tlsCfg)
 	logger.Info("gateway listening (dual http/https)", "addr", ln.Addr(), "cert", cfg.TLS.Cert)
 
@@ -175,6 +178,9 @@ func (g *Gateway) startDual(cfg conf.GatewayConf) error {
 func (g *Gateway) Shutdown(ctx context.Context) error {
 	g.prober.close()
 	g.stats.close()
+	if g.dualLn != nil {
+		_ = g.dualLn.Close() // 释放底层监听 (Shutdown 只管 chanListener)
+	}
 	return g.srv.Shutdown(ctx)
 }
 

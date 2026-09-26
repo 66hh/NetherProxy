@@ -121,7 +121,11 @@ func (r *rateLimiter) allow(key string, cfg conf.RateLimitConf) bool {
 	defer r.mu.Unlock()
 
 	if len(r.hits) >= maxKeys {
-		clear(r.hits)
+		if _, exists := r.hits[key]; !exists {
+			// 容量满且是新 key: 拒绝, 防止伪造 key 冲掉全部现有窗口
+			logger.Warn("rate limiter full, rejecting new key", "key", key, "max_keys", maxKeys)
+			return false
+		}
 	}
 
 	h := r.hits[key]

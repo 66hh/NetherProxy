@@ -26,6 +26,9 @@
 | GET | `/api/entry` | 线路状态：健康、活跃会话数、心跳统计 |
 | GET | `/api/session` | 会话列表：玩家名/XUID、客户端地址、状态、双向流量、时长 |
 | DELETE | `/api/session/{ufrag}` | 掐断指定会话（玩家立即掉线） |
+| GET | `/api/bds` | BDS 状态：健康、心跳统计、状态历史 |
+| GET | `/api/log` | 内存日志缓冲。参数：`tail`（默认 200，上限 1000）、`level`（默认 debug） |
+| GET | `/api/stats` | 代理状态采样序列（2s 间隔，保留 10 分钟），面板折线图数据源 |
 
 ### 错误响应格式
 

@@ -35,7 +35,10 @@ export default function Sessions() {
 
   function block(xuid, name) {
     if (!xuid) { toast('该会话无 XUID', true); return }
-    if (!confirm(`将玩家 ${name} (${xuid}) 加入黑名单?`)) return
+    if (!cfg) { toast('配置加载中, 请稍后', true); return }
+    const mode = cfg.gateway.access.mode
+    if (mode === 'whitelist' && !confirm('当前为白名单模式, 拉黑将切换为黑名单模式, 确认?')) return
+    else if (!confirm(`将玩家 ${name} (${xuid}) 加入黑名单?`)) return
     const c = JSON.parse(JSON.stringify(cfg))
     c.gateway.access.mode = 'blacklist'
     c.gateway.access.xuids = [...new Set([...(c.gateway.access.xuids || []), xuid])]

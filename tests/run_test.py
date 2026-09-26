@@ -13,6 +13,8 @@ import urllib.request
 
 GATEWAY = "http://127.0.0.1:19130"
 CONFIG_PATH = "config.yml"
+# 测试用线路: 取 multiplexer 实际监听地址, 经环境变量传给 fake_client 断言
+ENTRY_HOST = "127.0.0.1"
 
 
 def read_token() -> str:
@@ -45,18 +47,27 @@ def main():
     time.sleep(1)
 
     try:
-        # 热更: 关 JWT 验证, BDS 指向 fake
+        # 热更: 关 JWT 验证, BDS 指向 fake, 关闭访问控制与限流, 固定 entry
         cfg = json.loads(json.dumps(original))
         cfg["gateway"]["verify_identity"] = False
+        cfg["gateway"]["access"] = {"mode": "off", "xuids": [], "webhook": {"enable": False, "url": "", "timeout": "3s"}}
+        cfg["gateway"]["rate_limit"]["enable"] = False
         cfg["bds"] = [{
             "enable": True, "domain": "*",
             "host": "127.0.0.1", "port": 19501,
             "heartbeat": {"enable": False, "manual_only": False, "interval": "5s", "timeout": "2s", "retries": 3},
         }]
+        mux_port = cfg["multiplexer"]["port"]
+        cfg["entry"] = [{
+            "enable": True, "host": ENTRY_HOST, "port": mux_port, "max_session": 0,
+            "heartbeat": {"enable": False, "manual_only": False, "interval": "5s", "timeout": "2s", "retries": 3},
+        }]
         api("PUT", "/api/config", token, cfg)
         print("config switched to fake bds (verify_identity=false)", flush=True)
 
-        result = subprocess.run([sys.executable, "tests/fake_client.py"])
+        import os
+        env = dict(os.environ, NP_ENTRY_HOST=ENTRY_HOST, NP_ENTRY_PORT=str(cfg["multiplexer"]["port"]))
+        result = subprocess.run([sys.executable, "tests/fake_client.py"], env=env)
         code = result.returncode
     finally:
         # 恢复现场

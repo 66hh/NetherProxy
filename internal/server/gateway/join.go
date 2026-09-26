@@ -35,6 +35,13 @@ type joinHandler struct {
 
 	motdMu    sync.Mutex
 	motdCache map[string]*motdCacheEnt // bds key -> 缓存的 MOTD 响应
+
+	motdFlight sync.Map // bds key -> *motdCall, 缓存失效时的并发回源合并
+}
+
+// motdCall 一次进行中的回源请求
+type motdCall struct {
+	done chan struct{}
 }
 
 // motdCacheEnt 缓存的 MOTD 响应
@@ -75,18 +82,40 @@ func (h *joinHandler) motd(c *gin.Context) {
 		writeText(c, http.StatusNotFound, "no route for host")
 		return
 	}
+	key := bdsKey(backend)
 	ttl := h.motdCacheTTL()
 	if ttl > 0 {
-		if ent := h.getCachedMotd(bdsKey(backend)); ent != nil {
+		if ent := h.getCachedMotd(key); ent != nil {
 			motdTotal.WithLabelValues("cached").Inc()
 			c.Data(ent.status, ent.contentType, ent.body)
 			return
+		}
+		// 缓存失效时的并发回源合并 (singleflight): 只有一个请求真正打到 BDS
+		call := &motdCall{done: make(chan struct{})}
+		_, loaded := h.motdFlight.LoadOrStore(key, call)
+		if loaded {
+			select {
+			case <-call.done:
+				if ent := h.getCachedMotd(key); ent != nil {
+					motdTotal.WithLabelValues("cached").Inc()
+					c.Data(ent.status, ent.contentType, ent.body)
+					return
+				}
+			case <-c.Request.Context().Done():
+				return
+			}
+			// 回源失败, 走正常转发
+		} else {
+			defer func() {
+				h.motdFlight.Delete(key)
+				close(call.done)
+			}()
 		}
 	}
 	motdTotal.WithLabelValues("ok").Inc()
 	h.forward(c, backend, nil, func(status int, contentType string, respBody []byte) []byte {
 		if status == http.StatusOK && ttl > 0 {
-			h.cacheMotd(bdsKey(backend), status, contentType, respBody, ttl)
+			h.cacheMotd(key, status, contentType, respBody, ttl)
 		}
 		return respBody
 	})

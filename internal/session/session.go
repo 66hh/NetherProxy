@@ -275,6 +275,12 @@ func (t *Table) Add(info SessionInfo, backend *net.UDPConn) *Session {
 		lastActivity: time.Now(),
 	}
 	t.mu.Lock()
+	if t.closedFlag.Load() {
+		// Close 已完成的窗口期, 拒绝插入 (reaper 已停, 无人回收)
+		t.mu.Unlock()
+		_ = backend.Close()
+		return nil
+	}
 	old := t.byUfrag[info.Ufrag]
 	if old != nil {
 		t.removeLocked(old)

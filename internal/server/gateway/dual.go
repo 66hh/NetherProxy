@@ -90,11 +90,11 @@ func (l *chanListener) Close() error {
 
 func (l *chanListener) Addr() net.Addr { return l.addr }
 
-// deliver 投递连接, 已关闭时丢弃并关闭连接
+// deliver 投递连接, listener 已关闭或投递途中被关闭时丢弃并关闭连接
 func (l *chanListener) deliver(conn net.Conn) {
-	if l.closed.Load() {
+	select {
+	case l.conns <- conn:
+	case <-l.done:
 		_ = conn.Close()
-		return
 	}
-	l.conns <- conn
 }

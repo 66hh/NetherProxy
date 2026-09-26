@@ -53,6 +53,7 @@ type Multiplexer struct {
 
 	public *net.UDPConn // 公网单端口 socket
 
+	lifeMu  sync.RWMutex // CreateSession 与 Close 的生命周期互斥
 	closing atomic.Bool
 	ctx     context.Context
 	cancel  context.CancelFunc
@@ -122,7 +123,9 @@ func (m *Multiplexer) Table() *session.Table {
 
 // Close 关闭公网 socket 并停止全部循环。
 func (m *Multiplexer) Close() error {
+	m.lifeMu.Lock()
 	m.closing.Store(true)
+	m.lifeMu.Unlock()
 	m.cancel()
 	err := m.public.Close()
 	m.wg.Wait()
@@ -132,6 +135,8 @@ func (m *Multiplexer) Close() error {
 // CreateSession 由信令层在拦截 answer 后调用：
 // 建立通往 BDS 的内部 socket、注册会话、启动回包循环。
 func (m *Multiplexer) CreateSession(info session.SessionInfo) error {
+	m.lifeMu.RLock()
+	defer m.lifeMu.RUnlock()
 	if m.closing.Load() {
 		return errors.New("multiplexer is closing")
 	}

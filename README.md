@@ -48,7 +48,7 @@ level=INFO msg="multiplexer listening" addr=0.0.0.0:19131
 
 ### 环境要求
 
-- Go 1.27 及以上
+- Go 1.27.1 及以上
 - Node.js 18 及以上（仅修改前端时需要）
 
 ### 仅构建后端

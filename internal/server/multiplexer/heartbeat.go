@@ -314,13 +314,15 @@ func (t *EntryTracker) Remove(key string) {
 	entryHeartbeatRTT.DeleteLabelValues(key)
 }
 
-// Snapshot 返回全部线路统计的副本
+// Snapshot 返回全部线路统计的副本 (History 深拷贝, 防读写竞态)
 func (t *EntryTracker) Snapshot() map[string]EntryStats {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	out := make(map[string]EntryStats, len(t.stats))
 	for k, s := range t.stats {
-		out[k] = *s
+		cp := *s
+		cp.History = append([]ProbeEvent(nil), s.History...)
+		out[k] = cp
 	}
 	return out
 }
@@ -348,10 +350,20 @@ func (h *Heartbeat) Start() {
 	go h.reconcileLoop(ctx)
 }
 
-// Close 停止全部心跳 worker
+// Close 停止全部心跳 worker 并等待退出
 func (h *Heartbeat) Close() {
 	h.cancel()
 	<-h.done
+	h.mu.Lock()
+	workers := make([]*hbWorker, 0, len(h.workers))
+	for _, w := range h.workers {
+		workers = append(workers, w)
+	}
+	h.workers = make(map[string]*hbWorker)
+	h.mu.Unlock()
+	for _, w := range workers {
+		w.stop()
+	}
 }
 
 // reconcileLoop 周期性对比配置与运行中的 worker
@@ -391,19 +403,20 @@ func (h *Heartbeat) reconcile(ctx context.Context) {
 	}
 
 	h.mu.Lock()
+	var toStop []*hbWorker
 	for key, w := range h.workers {
 		e, ok := want[key]
 		if !ok {
-			w.stop()
 			delete(h.workers, key)
-			h.tracker.Remove(key)
-			logger.Debug("heartbeat worker removed", "entry", key)
+			toStop = append(toStop, w)
 			continue
 		}
 		if w.entry != e {
-			w.stop()
-			h.workers[key] = newHBWorker(key, e, h.tracker)
-			h.workers[key].start(ctx)
+			delete(h.workers, key)
+			toStop = append(toStop, w)
+			nw := newHBWorker(key, e, h.tracker)
+			h.workers[key] = nw
+			nw.start(ctx)
 			logger.Debug("heartbeat worker restarted", "entry", key)
 		}
 	}
@@ -417,6 +430,11 @@ func (h *Heartbeat) reconcile(ctx context.Context) {
 		}
 	}
 	h.mu.Unlock()
+
+	// stop 在锁外执行 (可能等待进行中的探测)
+	for _, w := range toStop {
+		w.stop()
+	}
 }
 
 // hbWorker 是单条线路的探测 worker
@@ -427,8 +445,9 @@ type hbWorker struct {
 	cancel  context.CancelFunc
 	done    chan struct{}
 
-	mu   sync.Mutex
-	conn *net.UDPConn // 进行中的 probe 使用的连接, stop 时关闭以打断阻塞的 Read
+	mu        sync.Mutex
+	conn      *net.UDPConn // 进行中的 probe 使用的连接, stop 时关闭以打断阻塞的 Read
+	isStopped bool
 }
 
 func newHBWorker(key string, entry conf.EntryConf, tracker *EntryTracker) *hbWorker {
@@ -441,8 +460,13 @@ func (w *hbWorker) start(ctx context.Context) {
 	go w.run(wctx)
 }
 
+// stopped 报告 worker 是否已被停止 (进行中的探测不计入统计)
+
 // stop 停止 worker 并等待进行中的探测退出
 func (w *hbWorker) stop() {
+	w.mu.Lock()
+	w.isStopped = true
+	w.mu.Unlock()
 	w.cancel()
 	w.mu.Lock()
 	if w.conn != nil {
@@ -450,6 +474,18 @@ func (w *hbWorker) stop() {
 	}
 	w.mu.Unlock()
 	<-w.done
+}
+
+// recordResult 记录探测结果; worker 已停止 (配置变更/下线) 时静默丢弃,
+// 防止被强制中断的探测计为真实失败
+func (w *hbWorker) recordResult(rtt time.Duration, err error, hb conf.HeartbeatConf) {
+	w.mu.Lock()
+	stopped := w.isStopped
+	w.mu.Unlock()
+	if stopped {
+		return
+	}
+	w.tracker.Record(w.key, rtt, err, hb.ManualOnly, hb.Retries)
 }
 
 func (w *hbWorker) run(ctx context.Context) {
@@ -471,12 +507,12 @@ func (w *hbWorker) run(ctx context.Context) {
 func (w *hbWorker) probeOnce(hb conf.HeartbeatConf) {
 	raddr, err := net.ResolveUDPAddr("udp", w.key)
 	if err != nil {
-		w.tracker.Record(w.key, 0, fmt.Errorf("resolve entry: %w", err), !hb.ManualOnly, hb.Retries)
+		w.recordResult(0, fmt.Errorf("resolve entry: %w", err), hb)
 		return
 	}
 	conn, err := net.DialUDP("udp", nil, raddr)
 	if err != nil {
-		w.tracker.Record(w.key, 0, fmt.Errorf("dial entry: %w", err), !hb.ManualOnly, hb.Retries)
+		w.recordResult(0, fmt.Errorf("dial entry: %w", err), hb)
 		return
 	}
 	w.mu.Lock()
@@ -503,19 +539,19 @@ func (w *hbWorker) probeOnce(hb conf.HeartbeatConf) {
 		_, err = conn.Write(pkt)
 	}
 	if err != nil {
-		w.tracker.Record(w.key, 0, err, !hb.ManualOnly, hb.Retries)
+		w.recordResult(0, err, hb)
 		return
 	}
 
 	buf := make([]byte, 64)
 	n, err := conn.Read(buf)
 	if err != nil {
-		w.tracker.Record(w.key, 0, err, !hb.ManualOnly, hb.Retries)
+		w.recordResult(0, err, hb)
 		return
 	}
 	if !isPongFor(buf[:n], pkt) {
-		w.tracker.Record(w.key, 0, errors.New("invalid pong"), !hb.ManualOnly, hb.Retries)
+		w.recordResult(0, errors.New("invalid pong"), hb)
 		return
 	}
-	w.tracker.Record(w.key, time.Since(start), nil, !hb.ManualOnly, hb.Retries)
+	w.recordResult(time.Since(start), nil, hb)
 }

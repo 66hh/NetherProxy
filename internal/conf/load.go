@@ -34,6 +34,7 @@ func Default() *Conf {
 			Port:           19130,
 			Token:          randomHex(16),
 			VerifyIdentity: true,
+			MotdCache:      "0s",
 			APIAuthExempt:  []string{"/api/healthz"},
 			Access: AccessConf{
 				Mode:  "off",
@@ -115,6 +116,10 @@ func normalize(c *Conf) {
 	}
 	for i := range c.Entry {
 		fillHeartbeatDefaults(&c.Entry[i].Heartbeat)
+	}
+	// 其他标量缺省
+	if c.Gateway.MotdCache == "" {
+		c.Gateway.MotdCache = "0s"
 	}
 }
 

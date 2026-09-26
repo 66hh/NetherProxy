@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -31,6 +32,17 @@ type joinHandler struct {
 	verifier *identityVerifier
 	limiter  *rateLimiter
 	client   *http.Client
+
+	motdMu    sync.Mutex
+	motdCache map[string]*motdCacheEnt // bds key -> 缓存的 MOTD 响应
+}
+
+// motdCacheEnt 缓存的 MOTD 响应
+type motdCacheEnt struct {
+	status      int
+	contentType string
+	body        []byte
+	expires     time.Time
 }
 
 func newJoinHandler(store *conf.Store, balancer *entryBalancer, mux *multiplexer.Multiplexer, bdsTrack *bdsTracker) *joinHandler {
@@ -63,8 +75,56 @@ func (h *joinHandler) motd(c *gin.Context) {
 		writeText(c, http.StatusNotFound, "no route for host")
 		return
 	}
+	ttl := h.motdCacheTTL()
+	if ttl > 0 {
+		if ent := h.getCachedMotd(bdsKey(backend)); ent != nil {
+			motdTotal.WithLabelValues("cached").Inc()
+			c.Data(ent.status, ent.contentType, ent.body)
+			return
+		}
+	}
 	motdTotal.WithLabelValues("ok").Inc()
-	h.forward(c, backend, nil, nil)
+	h.forward(c, backend, nil, func(status int, contentType string, respBody []byte) []byte {
+		if status == http.StatusOK && ttl > 0 {
+			h.cacheMotd(bdsKey(backend), status, contentType, respBody, ttl)
+		}
+		return respBody
+	})
+}
+
+// motdCacheTTL 返回配置的 MOTD 缓存时长, 0 表示不缓存
+func (h *joinHandler) motdCacheTTL() time.Duration {
+	d, err := time.ParseDuration(h.store.Get().Gateway.MotdCache)
+	if err != nil {
+		return 0
+	}
+	return d
+}
+
+// getCachedMotd 返回未过期的缓存响应, 无缓存返回 nil
+func (h *joinHandler) getCachedMotd(key string) *motdCacheEnt {
+	h.motdMu.Lock()
+	defer h.motdMu.Unlock()
+	ent := h.motdCache[key]
+	if ent == nil || time.Now().After(ent.expires) {
+		return nil
+	}
+	return ent
+}
+
+// cacheMotd 写入 MOTD 缓存
+func (h *joinHandler) cacheMotd(key string, status int, contentType string, body []byte, ttl time.Duration) {
+	h.motdMu.Lock()
+	defer h.motdMu.Unlock()
+	if h.motdCache == nil {
+		h.motdCache = make(map[string]*motdCacheEnt)
+	}
+	h.motdCache[key] = &motdCacheEnt{
+		status:      status,
+		contentType: contentType,
+		body:        body,
+		expires:     time.Now().Add(ttl),
+	}
 }
 
 // offer 处理 POST /v1/join/:networkID, 透传 SDP offer 并拦截重写 answer

@@ -42,6 +42,8 @@ def udp_listener():
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
+        counter[0] += 1
+        print(f"[fake-bds] GET {self.path} (#{counter[0]})", flush=True)
         body = json.dumps({
             "name": "fake-bds", "protocol": 2193, "version": "test",
             "players": 0, "maxPlayers": 10, "gameType": 0,

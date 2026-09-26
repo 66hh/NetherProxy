@@ -26,6 +26,7 @@
 | `api_auth_exempt` | `["/api/healthz"]` | 免认证的 API 路由列表（按路由模板匹配，热更） |
 | `relay_only` | `false` | 中继模式：offer 中客户端真实地址替换为不可达占位，隐藏玩家 IP、强制流量经代理（热更） |
 | `tls.enable` / `cert` / `key` | `false` | TLS 证书（PEM），最低 TLS 1.2 |
+| `tls.dual` | `false` | 同端口同时支持明文 HTTP 与 HTTPS（安卓客户端仅 HTTP，iOS 仅 HTTPS） |
 | `metrics.enable` | `false` | Prometheus 指标（固定 `/api/metrics`，认证跟随豁免列表） |
 | `access` | 见下 | 访问控制（热更） |
 | `rate_limit` | 见下 | join 限流（热更） |

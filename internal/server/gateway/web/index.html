@@ -340,10 +340,12 @@ const SCHEMA = [
     ["gateway.token", "访问令牌 (显示 *** 表示不修改)", "text"],
     ["gateway.verify_identity", "验证玩家身份 JWT", "bool"],
     ["gateway.relay_only", "中继模式 (隐藏客户端真实地址)", "bool"],
+    ["gateway.motd_cache", "MOTD 缓存时长 (如 5s, 0s 不缓存)", "text"],
     ["gateway.api_auth_exempt", "免认证 API 路由", "list"],
   ]},
   { group: "TLS", fields: [
     ["gateway.tls.enable", "启用 TLS", "bool"],
+    ["gateway.tls.dual", "同端口双协议 (明文 HTTP + HTTPS)", "bool"],
     ["gateway.tls.cert", "证书 (PEM)", "text"],
     ["gateway.tls.key", "私钥", "text"],
   ]},

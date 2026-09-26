@@ -124,10 +124,13 @@ func New(store *conf.Store, mux *multiplexer.Multiplexer, tracker *multiplexer.E
 func (g *Gateway) Start() error {
 	cfg := g.store.Get().Gateway
 	var err error
-	if cfg.TLS.Enable {
+	switch {
+	case cfg.TLS.Enable && cfg.TLS.Dual:
+		err = g.startDual(cfg)
+	case cfg.TLS.Enable:
 		logger.Info("gateway listening with TLS", "addr", g.srv.Addr, "cert", cfg.TLS.Cert)
 		err = g.srv.ListenAndServeTLS(cfg.TLS.Cert, cfg.TLS.Key)
-	} else {
+	default:
 		logger.Info("gateway listening", "addr", g.srv.Addr)
 		err = g.srv.ListenAndServe()
 	}
@@ -135,6 +138,28 @@ func (g *Gateway) Start() error {
 		return nil
 	}
 	return fmt.Errorf("gateway serve: %w", err)
+}
+
+// startDual 同端口同时提供明文 HTTP 与 HTTPS (按首字节分流)
+func (g *Gateway) startDual(cfg conf.GatewayConf) error {
+	cert, err := tls.LoadX509KeyPair(cfg.TLS.Cert, cfg.TLS.Key)
+	if err != nil {
+		return fmt.Errorf("load tls keypair: %w", err)
+	}
+	tlsCfg := g.srv.TLSConfig.Clone()
+	tlsCfg.Certificates = []tls.Certificate{cert}
+
+	ln, err := net.Listen("tcp", g.srv.Addr)
+	if err != nil {
+		return fmt.Errorf("gateway listen: %w", err)
+	}
+	plainLn, tlsLn := splitDualListener(ln, tlsCfg)
+	logger.Info("gateway listening (dual http/https)", "addr", ln.Addr(), "cert", cfg.TLS.Cert)
+
+	errCh := make(chan error, 2)
+	go func() { errCh <- g.srv.Serve(plainLn) }()
+	go func() { errCh <- g.srv.Serve(tlsLn) }()
+	return <-errCh
 }
 
 // Shutdown 优雅关闭网关服务, 等待进行中的请求处理完毕

@@ -12,6 +12,7 @@ import (
 // TLS配置
 type TLSConf struct {
 	Enable bool   `yaml:"enable" json:"enable"` // 是否启用TLS
+	Dual   bool   `yaml:"dual" json:"dual"`     // 同端口同时支持明文 HTTP (安卓客户端仅 HTTP, iOS 仅 HTTPS)
 	Cert   string `yaml:"cert" json:"cert"`     // PEM 路径
 	Key    string `yaml:"key" json:"key"`       // 私钥路径
 }
@@ -65,6 +66,7 @@ type GatewayConf struct {
 	VerifyIdentity bool          `yaml:"verify_identity" json:"verify_identity"` // 是否验证玩家身份 JWT
 	APIAuthExempt  []string      `yaml:"api_auth_exempt" json:"api_auth_exempt"` // 免认证的 API 路由 (如 ["/api/healthz"]), 不在列表中的一律需要 Bearer 认证
 	RelayOnly      bool          `yaml:"relay_only" json:"relay_only"`           // 中继模式: 隐藏客户端真实地址 (offer candidate 替换为不可达占位), 强制全部流量经代理
+	MotdCache      string        `yaml:"motd_cache" json:"motd_cache"`           // MOTD 缓存时长, 如 "5s"; "0s" 表示不缓存. 防止服务器列表刷新流量直接打进 BDS
 	TLS            TLSConf       `yaml:"tls" json:"tls"`                         // TLS配置
 	Metrics        MetricsConf   `yaml:"metrics" json:"metrics"`                 // 指标配置
 	Access         AccessConf    `yaml:"access" json:"access"`                   // 访问控制 (黑白名单/webhook)
@@ -242,6 +244,10 @@ func (c *Conf) Validate() error {
 		if c.Gateway.TLS.Key == "" {
 			errs = append(errs, errors.New("gateway.tls.key: required when tls is enabled"))
 		}
+	}
+
+	if d, err := time.ParseDuration(c.Gateway.MotdCache); err != nil || d < 0 {
+		errs = append(errs, fmt.Errorf("gateway.motd_cache: invalid duration %q", c.Gateway.MotdCache))
 	}
 
 	// token 是全部需认证 API 的凭据, 不允许为空

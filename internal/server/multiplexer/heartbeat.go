@@ -142,7 +142,10 @@ func (t *EntryTracker) load() {
 		return
 	}
 	for k, v := range loaded {
+		// 累计计数保留, 但当前失败状态清零 (重启后重新探测判定)
+		v.ConsecutiveFails = 0
 		v.unresponsive = false
+		v.Healthy = true
 		t.stats[k] = &v
 		if v.Healthy {
 			entryHealthy.WithLabelValues(k).Set(1)

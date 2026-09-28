@@ -1,0 +1,55 @@
+name: Release
+
+# 打 tag (v*) 后自动构建四平台产物并上传到 GitHub Release
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+          - goos: windows
+            goarch: arm64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # 前端产物已内嵌提交 (internal/server/gateway/web/index.html), 直接交叉编译
+      # 版本/commit 由 CI 注入 buildinfo 占位符
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          out="netherproxy-${{ matrix.goos }}-${{ matrix.goarch }}"
+          if [ "${{ matrix.goos }}" = "windows" ]; then out="$out.exe"; fi
+          go build -trimpath -ldflags "-s -w \
+            -X NetherProxy/internal/buildinfo.Version=${GITHUB_REF_NAME#v} \
+            -X NetherProxy/internal/buildinfo.Commit=${GITHUB_SHA::7}" \
+            -o "$out" ./cmd/netherproxy
+
+      - name: Checksum
+        run: for f in netherproxy-*; do sha256sum "$f" > "$f.sha256"; done
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: netherproxy-*

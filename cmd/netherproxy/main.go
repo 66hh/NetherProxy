@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"NetherProxy/internal/buildinfo"
 	"NetherProxy/internal/conf"
 	"NetherProxy/internal/logger"
 	"NetherProxy/internal/notify"
@@ -61,7 +62,7 @@ func run() int {
 	logger.Init(cfg.Log.Level, cfg.Log.Format, w)
 	logger.SetBufSize(cfg.Log.BufferSize)
 
-	logger.Info("NetherProxy started")
+	logger.Info("NetherProxy started", "version", buildinfo.Version, "commit", buildinfo.Commit)
 
 	store := conf.NewStore(configPath, cfg)
 	table := session.NewTable(store)

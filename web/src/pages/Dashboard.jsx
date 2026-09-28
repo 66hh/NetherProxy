@@ -43,14 +43,14 @@ export default function Dashboard() {
           <span><i style={{ background: 'var(--accent)' }}></i>下行</span>
         </div>
         <LineChart points={points} height={180} unit="/s" series={[
-          { key: 'rx_rate', color: '#3fb950' },
-          { key: 'tx_rate', color: '#58a6ff' },
+          { key: 'rx_rate', color: '#3fb950', label: '上行' },
+          { key: 'tx_rate', color: '#58a6ff', label: '下行' },
         ]} />
       </div>
       <div className="card">
         <h3>活跃会话</h3>
         <LineChart points={points} height={120} series={[
-          { key: 'sessions', color: '#d29922' },
+          { key: 'sessions', color: '#d29922', label: '会话' },
         ]} />
       </div>
     </>

@@ -36,3 +36,12 @@ export async function api(path, method = 'GET', body, opts = {}) {
   if (!resp.ok) throw new Error(data.details || data.error || 'HTTP ' + resp.status)
   return data
 }
+
+// parseTime 解析后端时间戳 (Go RFC3339Nano)。JS Date 只支持毫秒精度,
+// 纳秒部分截断到 3 位; 无小数的整秒格式原样解析
+export function parseTime(s) {
+  if (typeof s !== 'string') return new Date(NaN)
+  const m = s.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d+))?(.*)$/)
+  if (!m) return new Date(s)
+  return new Date(m[1] + (m[2] ? '.' + m[2].slice(0, 3).padEnd(3, '0') : '') + m[3])
+}

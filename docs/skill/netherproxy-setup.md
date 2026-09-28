@@ -59,9 +59,13 @@ under `/api`, and an embedded React control panel (served at `/`).
 
 ## 3. Configuration reference
 
-Config file: `config.yml` (YAML). Missing sections/keys fall back to defaults. Most fields
-hot-reload via the panel or `POST /api/config/reload`; listen addresses, TLS, and the
-metrics switch require a restart (the panel says so when saving). Durations use Go syntax
+Config file: `config.yml` (YAML), auto-generated with defaults on first launch — the
+gateway token is printed to the console at startup (`gateway token: ...`) and is what the
+user needs for panel login. Missing sections/keys fall back to defaults. Most fields
+hot-reload via the panel or `POST /api/config/reload`; the exceptions that require a
+restart are: listen addresses (`gateway.host/port`, `multiplexer.host/port`), TLS settings,
+the metrics switch, and all `log` fields except `level` (format/file/rotation/buffer size).
+The panel says "restart required" when saving such changes. Durations use Go syntax
 (`5s`, `1m30s`).
 
 ### log
@@ -71,7 +75,7 @@ metrics switch require a restart (the panel says so when saving). Durations use 
 | `level` | `info` | `debug`/`info`/`warn`/`error` (hot) |
 | `format` | `text` | `text` or `json` |
 | `file` | empty | Log file path; empty = console only. Rotates when set |
-| `max_size` / `max_backups` / `max_age` / `compress` | `100`/`7`/`30`/`false` | Rotation: MB per file, kept files, kept days, gzip old files |
+| `max_size` / `max_backups` / `max_age` / `compress` | `100`/`7`/`30`/`false` | Rotation: MB per file (0 = 100), kept files (0 = unlimited), kept days (0 = unlimited), gzip old files |
 | `buffer_size` | `1000` | In-memory entries for the panel log viewer |
 
 ### gateway
@@ -83,7 +87,7 @@ metrics switch require a restart (the panel says so when saving). Durations use 
 | `verify_identity` | `true` | Verify the player's Microsoft-signed identity JWT |
 | `relay_only` | `false` | Hide real client addresses; force all media via the proxy |
 | `motd_cache` | `0s` | MOTD cache TTL; `0s` disables caching |
-| `api_auth_exempt` | `["/api/healthz"]` | Routes that skip Bearer auth. Write routes (`PUT /api/config`, `POST /api/config/reload`, `DELETE /api/session/*`) can never be exempted |
+| `api_auth_exempt` | `["/api/healthz"]` | Routes that skip Bearer auth. Entries are `"/api/x"` (all methods) or `"GET /api/x"` (GET only). Write routes (`PUT /api/config`, `POST /api/config/reload`, `DELETE /api/session/*`) can never be exempted; read-only `GET /api/config` may be exempted explicitly |
 
 ### gateway.tls
 
@@ -104,10 +108,11 @@ unless exempted). Sample scrape config is embedded as a comment on `MetricsConf`
 |---|---|
 | `mode` | `off` / `blacklist` / `whitelist` |
 | `xuids` | XUID list for the chosen mode |
-| `webhook.enable` / `url` / `timeout` | On join, POST `{"xuid","xname","client_ip"}`; response `{"allow": bool}`. Fail-closed: errors, non-200, and `allow:false` all reject |
+| `webhook.enable` / `url` / `timeout` | On join, POST `{"xuid","xname","client_ip"}`; response HTTP 200 + `{"allow": bool, "reason": "optional, logged"}`. Fail-closed: errors, non-200, and `allow:false` all reject. Default timeout `3s` |
 
-Access control and rate limiting require a verified identity; with `verify_identity: false`
-any enabled access control rejects joins (fail-closed).
+Access control (list modes and webhook) requires a verified identity; with
+`verify_identity: false` any enabled access control rejects joins (fail-closed).
+Rate limiting still works without verification — it falls back to the client IP.
 
 ### gateway.rate_limit — join throttling
 
@@ -129,7 +134,7 @@ bds:
     domain: "*.example.com"   # Host-header match: "*" any / "*.x" subdomains / exact; earlier entries win
     host: 127.0.0.1
     port: 19132
-    heartbeat:                # HTTP GET /v1/join health probe
+    heartbeat:                # HTTP GET /v1/join health probe (disabled by default)
       enable: false
       manual_only: false      # true = record stats/logs only, no auto-offline
       interval: 5s
@@ -144,9 +149,10 @@ entry:
   - enable: true
     host: 203.0.113.10        # address clients dial; must map to the multiplexer
     port: 19131
-    max_session: 100          # 0 = unlimited; balancing is least-sessions
+    max_session: 100          # 0 = unlimited; balancing is least-sessions,
+                              # skipping full or heartbeat-offlined entries
     heartbeat:                # UDP NPING/NPONG probe, never forwarded to BDS
-      enable: true
+      enable: true            # (disabled by default; shown enabled as recommended)
       manual_only: false
       interval: 5s
       timeout: 2s

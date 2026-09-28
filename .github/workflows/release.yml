@@ -39,17 +39,32 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 0
         run: |
-          out="netherproxy-${{ matrix.goos }}-${{ matrix.goarch }}"
-          if [ "${{ matrix.goos }}" = "windows" ]; then out="$out.exe"; fi
+          out="netherproxy"
+          if [ "${{ matrix.goos }}" = "windows" ]; then out="netherproxy.exe"; fi
           go build -trimpath -ldflags "-s -w \
             -X NetherProxy/internal/buildinfo.Version=${GITHUB_REF_NAME#v} \
             -X NetherProxy/internal/buildinfo.Commit=${GITHUB_SHA::7}" \
             -o "$out" ./cmd/netherproxy
 
+      # 打包: netherproxy-<tag>-<os>-<arch>/ 内含 二进制 + docs/ + agents.md
+      # (agents.md 即 docs/skill/netherproxy-setup.md, 放部署根目录便于 AI 助手读取)
+      - name: Package
+        run: |
+          name="netherproxy-${GITHUB_REF_NAME}-${{ matrix.goos }}-${{ matrix.goarch }}"
+          bin="netherproxy"
+          if [ "${{ matrix.goos }}" = "windows" ]; then bin="netherproxy.exe"; fi
+          mkdir -p "$name"
+          mv "$bin" "$name/"
+          cp -r docs "$name/"
+          cp docs/skill/netherproxy-setup.md "$name/agents.md"
+          tar -czf "$name.tar.gz" "$name"
+
       - name: Checksum
-        run: for f in netherproxy-*; do sha256sum "$f" > "$f.sha256"; done
+        run: for f in *.tar.gz; do sha256sum "$f" > "$f.sha256"; done
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
-          files: netherproxy-*
+          files: |
+            *.tar.gz
+            *.tar.gz.sha256

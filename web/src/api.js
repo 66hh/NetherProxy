@@ -12,13 +12,23 @@ import { connState } from './state'
 
 export async function api(path, method = 'GET', body, opts = {}) {
   const hadToken = !!token
-  const resp = await fetch(path, {
-    method,
-    headers: Object.assign(
-      { Authorization: 'Bearer ' + token },
-      body ? { 'Content-Type': 'application/json' } : {}),
-    body: body ? JSON.stringify(body) : undefined,
-  })
+  let resp
+  try {
+    resp = await fetch(path, {
+      method,
+      headers: Object.assign(
+        { Authorization: 'Bearer ' + token },
+        body ? { 'Content-Type': 'application/json' } : {}),
+      body: body ? JSON.stringify(body) : undefined,
+    })
+  } catch (e) {
+    // 网络层失败 (服务宕机/断网): 标记断连并打上标记, 调用方可区分"服务不可达"
+    connState.failed = true
+    e.network = true
+    throw e
+  }
+  // 收到任何 HTTP 响应都说明连接正常 (含 400/404 等业务错误)
+  connState.failed = false
   if (resp.status === 401) {
     // 会话过期才刷新回登录页; 登录尝试本身由调用方提示
     if (hadToken && !opts.noRedirect) {
@@ -28,7 +38,6 @@ export async function api(path, method = 'GET', body, opts = {}) {
     throw new Error('unauthorized')
   }
   const data = await resp.json().catch(() => ({}))
-  connState.failed = !resp.ok
   if (!resp.ok) throw new Error(data.details || data.error || 'HTTP ' + resp.status)
   return data
 }

@@ -74,7 +74,7 @@ func isPongFor(resp, ping []byte) bool {
 
 // replyPong 回应线路心跳
 func (m *Multiplexer) replyPong(ping []byte, src netip.AddrPort) {
-	if _, err := m.public.WriteToUDPAddrPort(makePong(ping), src); err != nil {
+	if err := m.writePublic(makePong(ping), src); err != nil {
 		logger.Debug("reply pong failed", "src", src, "err", err)
 	}
 }
@@ -216,6 +216,7 @@ func (t *EntryTracker) flush() {
 	data, err := json.MarshalIndent(snap, "", "  ")
 	if err != nil {
 		logger.Error("marshal entry stats failed", "err", err)
+		t.reDirty() // 与写失败路径一致, 下个 tick 重试
 		return
 	}
 	tmp := t.path + ".tmp"
@@ -566,6 +567,7 @@ func (w *hbWorker) probeOnce(hb conf.HeartbeatConf) {
 		_, err = conn.Write(pkt)
 	}
 	if err != nil {
+		w.raddr = nil // 写路径失败同样清除缓存, 下轮重新解析 (线路可能换 IP)
 		w.recordResult(0, err, hb)
 		return
 	}

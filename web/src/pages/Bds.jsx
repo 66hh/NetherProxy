@@ -28,9 +28,13 @@ export default function Bds() {
     c.bds = c.bds || []
     let idx = editing.index
     if (idx >= 0) {
-      // 保存时按 key 重新定位, 防止弹窗期间配置被外部修改导致错位覆盖
-      idx = findIdx(c.bds, editing.key)
-      if (idx < 0) { toast('该条目已被删除, 保存取消', true); setEditing(null); return }
+      // 先用已存下标 (弹窗期间配置未变时直接命中), 不匹配再按 key 重定位,
+      // 防止配置被外部修改导致错位覆盖
+      const at = c.bds[idx]
+      if (!at || keyOf(at) !== editing.key) {
+        idx = findIdx(c.bds, editing.key)
+        if (idx < 0) { toast('该条目已被删除, 保存取消', true); setEditing(null); return }
+      }
       c.bds[idx] = editing.data
     } else c.bds.push(editing.data)
     api('/api/config', 'PUT', c)
@@ -38,7 +42,7 @@ export default function Bds() {
       .catch(e => toast(e.message, true))
   }
 
-  function findIdx(list, key) { return (list || []).findIndex(b => b.host + ':' + b.port === key) }
+  function findIdx(list, key) { return (list || []).findIndex(b => keyOf(b) === key) }
 
   function keyOf(e) { return e.host.includes(':') ? `[${e.host}]:${e.port}` : `${e.host}:${e.port}` }
 
@@ -69,7 +73,7 @@ export default function Bds() {
         <button className="btn primary" onClick={() => setEditing({ index: -1, key: '', data: emptyBds() })}>新增 BDS</button>
       </div>
       {list.map((b, i) => (
-        <div className="card" key={b.key + b.domain}>
+        <div className="card" key={b.key + b.domain + '#' + i}>
           <h3><span className={`dot ${b.healthy ? 'up' : 'down'}`}></span>{b.domain} → {b.key} {b.enable ? '' : '(已禁用)'}</h3>
           <div className="row">
             {b.stats

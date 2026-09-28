@@ -2,9 +2,12 @@ package gateway
 
 import (
 	"crypto/tls"
+	"errors"
 	"net"
 	"sync"
 	"time"
+
+	"NetherProxy/internal/logger"
 )
 
 // splitDualListener 把 TCP listener 按首字节分流为明文与 TLS 两个 listener:
@@ -14,13 +17,24 @@ func splitDualListener(ln net.Listener, tlsCfg *tls.Config) (plain net.Listener,
 	p := newChanListener(ln.Addr())
 	s := newChanListener(ln.Addr())
 	go func() {
+		backoff := 10 * time.Millisecond
 		for {
 			conn, err := ln.Accept()
 			if err != nil {
-				p.Close()
-				s.Close()
-				return
+				if errors.Is(err, net.ErrClosed) {
+					p.Close()
+					s.Close()
+					return
+				}
+				// 临时错误 (EMFILE/ECONNABORTED 等): 退避重试, 不永久失聪
+				logger.Warn("dual listener accept failed, retrying", "err", err, "backoff", backoff.String())
+				time.Sleep(backoff)
+				if backoff < time.Second {
+					backoff *= 2
+				}
+				continue
 			}
+			backoff = 10 * time.Millisecond
 			go dispatchDual(conn, p, s, tlsCfg)
 		}
 	}()

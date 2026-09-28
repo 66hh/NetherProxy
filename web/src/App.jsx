@@ -14,8 +14,14 @@ export const ConfigCtx = React.createContext({ cfg: null, version: 0, refresh: (
 function ConnState() {
   const [ok, setOk] = useState(true)
   useEffect(() => {
-    const t = setInterval(() => setOk(!connState.failed), 2000)
-    return () => clearInterval(t)
+    let dead = false
+    // 主动探测 (healthz 默认豁免认证), 不依赖当前页面是否有轮询
+    const check = () => fetch('/api/healthz')
+      .then(r => { connState.failed = false; if (!dead) setOk(r.ok) })
+      .catch(() => { connState.failed = true; if (!dead) setOk(false) })
+    check()
+    const t = setInterval(check, 5000)
+    return () => { dead = true; clearInterval(t) }
   }, [])
   return <span className="row"><span className={`dot ${ok ? 'up' : 'down'}`}></span>{ok ? '已连接' : '连接断开'}</span>
 }
@@ -55,7 +61,11 @@ export default function App() {
             setToken(t)
             api('/api/session', 'GET', undefined, { noRedirect: true })
               .then(() => { setAuthed(true); refresh() })
-              .catch(() => { setToken(''); toast('令牌无效', true) })
+              .catch(err => {
+                setToken('')
+                // 网络层失败是服务不可达而非令牌问题, 分开提示
+                toast(err.network ? '无法连接到服务, 请确认代理已启动' : '令牌无效', true)
+              })
           }}>
             <label className="fld"><span>Token (gateway.token)</span>
               <input type="password" name="token" autoFocus /></label>

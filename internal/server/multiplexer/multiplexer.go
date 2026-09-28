@@ -24,6 +24,7 @@ import (
 	"net/netip"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -51,7 +52,8 @@ type Multiplexer struct {
 	table   *session.Table
 	tracker *EntryTracker
 
-	public *net.UDPConn // 公网单端口 socket
+	public4 *net.UDPConn // 公网 IPv4 socket
+	public6 *net.UDPConn // 公网 IPv6 socket (可选, 系统不支持时为空)
 
 	lifeMu  sync.RWMutex // CreateSession 与 Close 的生命周期互斥
 	closing atomic.Bool
@@ -76,34 +78,87 @@ func New(store *conf.Store, table *session.Table, tracker *EntryTracker) *Multip
 }
 
 // Start 监听配置的 UDP 地址并启动转发与回包循环。
+//
+// 地址族策略: 通配/空地址同时监听 IPv4 与 IPv6 两个独立 socket
+// (不用双栈 socket, 避开部分 Windows 环境收不到网卡地址入站包的问题,
+// 同时避免 4-in-6 映射地址导致 5-tuple 查找失配); 显式指定地址时
+// 只监听对应协议。IPv6 不可用的环境自动降级为仅 IPv4。
 func (m *Multiplexer) Start() error {
 	cfg := m.store.Get().Multiplexer
-	addr := net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port))
-	udpAddr, err := net.ResolveUDPAddr("udp4", addr)
-	if err != nil {
-		return fmt.Errorf("resolve multiplexer addr: %w", err)
+	host := strings.TrimPrefix(strings.TrimSuffix(cfg.Host, "]"), "[")
+	port := strconv.Itoa(cfg.Port)
+
+	sockets := []struct {
+		network  string
+		required bool
+	}{{"udp4", true}, {"udp6", false}}
+	// 通配地址 (空/0.0.0.0/::) 不进入单栈分支: 用户写 0.0.0.0 意为"所有接口",
+	// 应同时监听两个协议族
+	if ip, err := netip.ParseAddr(host); err == nil && !ip.IsUnspecified() {
+		if ip.Is4() {
+			sockets = sockets[:1]
+		} else {
+			sockets = []struct {
+				network  string
+				required bool
+			}{{"udp6", true}}
+		}
 	}
-	// 显式使用纯 IPv4 监听（0.0.0.0），排除双栈 socket 在部分 Windows
-	// 环境下收不到网卡地址入站包的问题。
-	conn, err := net.ListenUDP("udp4", udpAddr)
-	if err != nil {
-		return fmt.Errorf("listen udp: %w", err)
+
+	for _, s := range sockets {
+		listenHost := host
+		if s.network == "udp6" {
+			// 双栈场景下 v4 通配地址 (0.0.0.0) 不能用于 udp6, 换成 v6 通配
+			if ip, err := netip.ParseAddr(host); err == nil && ip.Is4() {
+				listenHost = "::"
+			}
+		}
+		udpAddr, err := net.ResolveUDPAddr(s.network, net.JoinHostPort(listenHost, port))
+		if err != nil {
+			if s.required {
+				return fmt.Errorf("resolve multiplexer addr: %w", err)
+			}
+			logger.Warn("ipv6 resolve unavailable, ipv4 only", "err", err)
+			continue
+		}
+		conn, err := net.ListenUDP(s.network, udpAddr)
+		if err != nil {
+			if s.required {
+				return fmt.Errorf("listen udp: %w", err)
+			}
+			logger.Warn("ipv6 listen unavailable, ipv4 only", "err", err)
+			continue
+		}
+		if s.network == "udp6" {
+			// 显式 v6only, 杜绝 v4 包以 4-in-6 地址进入 v6 socket
+			setV6Only(conn)
+		}
+		if err := conn.SetReadBuffer(socketBufferSize); err != nil {
+			logger.Warn("set udp read buffer failed", "err", err)
+		}
+		if err := conn.SetWriteBuffer(socketBufferSize); err != nil {
+			logger.Warn("set udp write buffer failed", "err", err)
+		}
+		if s.network == "udp4" {
+			m.public4 = conn
+		} else {
+			m.public6 = conn
+		}
 	}
-	if err := conn.SetReadBuffer(socketBufferSize); err != nil {
-		logger.Warn("set udp read buffer failed", "err", err)
-	}
-	if err := conn.SetWriteBuffer(socketBufferSize); err != nil {
-		logger.Warn("set udp write buffer failed", "err", err)
-	}
-	m.public = conn
+
 	m.registerSessionMetrics()
 
 	readers := min(runtime.NumCPU(), maxReaders)
-	for i := 0; i < readers; i++ {
-		m.wg.Add(1)
-		go m.loop()
+	for _, conn := range []*net.UDPConn{m.public4, m.public6} {
+		if conn == nil {
+			continue
+		}
+		for i := 0; i < readers; i++ {
+			m.wg.Add(1)
+			go m.loop(conn)
+		}
+		logger.Info("multiplexer listening", "addr", conn.LocalAddr(), "readers", readers)
 	}
-	logger.Info("multiplexer listening", "addr", conn.LocalAddr(), "readers", readers)
 	return nil
 }
 
@@ -112,13 +167,21 @@ func (m *Multiplexer) Table() *session.Table {
 	return m.table
 }
 
-// Close 关闭公网 socket 并停止全部循环。
+// Close 关闭公网 socket 并停止全部循环 (Start 失败未监听时调用也安全)。
 func (m *Multiplexer) Close() error {
 	m.lifeMu.Lock()
 	m.closing.Store(true)
 	m.lifeMu.Unlock()
 	m.cancel()
-	err := m.public.Close()
+	var err error
+	if m.public4 != nil {
+		err = m.public4.Close()
+	}
+	if m.public6 != nil {
+		if e := m.public6.Close(); err == nil {
+			err = e
+		}
+	}
 	m.wg.Wait()
 	return err
 }
@@ -146,20 +209,25 @@ func (m *Multiplexer) CreateSession(info session.SessionInfo) error {
 	return nil
 }
 
-// loop 是公网 socket 的收包循环。单个包处理出错/panic 不退出循环。
-func (m *Multiplexer) loop() {
+// loop 是公网 socket 的收包循环。单个包处理出错/panic 不退出循环;
+// 连续读取失败按次退避, 防止永久 socket 错误时忙转刷日志。
+func (m *Multiplexer) loop(conn *net.UDPConn) {
 	defer m.wg.Done()
 	buf := make([]byte, maxUDPPacketSize)
+	errCount := 0
 	for {
-		n, src, err := m.public.ReadFromUDPAddrPort(buf)
+		n, src, err := conn.ReadFromUDPAddrPort(buf)
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) || m.ctx.Err() != nil {
 				return
 			}
 			// 单个包读取失败 (如 ICMP 不可达回执) 不影响整体服务
-			logger.Debug("read public socket failed", "err", err)
+			errCount++
+			logger.Debug("read public socket failed", "err", err, "count", errCount)
+			time.Sleep(min(time.Duration(errCount)*10*time.Millisecond, time.Second))
 			continue
 		}
+		errCount = 0
 		m.safeHandle(buf[:n], src)
 	}
 }
@@ -270,7 +338,7 @@ func (m *Multiplexer) backendLoop(sess *session.Session) {
 		sess.AddTx(n)
 		m.totalTx.Add(uint64(n))
 		trafficBytes.WithLabelValues("tx").Add(float64(n))
-		if _, err := m.public.WriteToUDPAddrPort(buf[:n], client); err != nil {
+		if err := m.writePublic(buf[:n], client); err != nil {
 			logger.Debug("forward to client failed", "ufrag", sess.Ufrag, "err", err)
 		}
 		if isDTLSAlert(buf[:n]) {
@@ -368,6 +436,31 @@ func verifySTUNIntegrity(b []byte, pwd string) (ok bool, verified bool) {
 	}
 	// 未携带 MESSAGE-INTEGRITY: 放行但不视为已验证
 	return true, false
+}
+
+// writePublic 按目标地址族选择公网 socket 发送 (Unmap 防御 4-in-6 地址)。
+func (m *Multiplexer) writePublic(pkt []byte, dst netip.AddrPort) error {
+	conn := m.public4
+	if dst.Addr().Unmap().Is6() {
+		conn = m.public6
+	}
+	if conn == nil {
+		return errors.New("no socket for address family")
+	}
+	_, err := conn.WriteToUDPAddrPort(pkt, dst)
+	return err
+}
+
+// setV6Only 显式设置 IPV6_V6ONLY, 防止 v4 包以 4-in-6 映射地址进入 v6
+// socket (Linux 默认关闭 v6only), 导致 5-tuple 查找失配丢包。
+func setV6Only(conn *net.UDPConn) {
+	raw, err := conn.SyscallConn()
+	if err != nil {
+		return
+	}
+	_ = raw.Control(func(fd uintptr) {
+		_ = setsockoptV6Only(fd)
+	})
 }
 
 // EntryKey 返回线路的标识 (host:port)。

@@ -28,9 +28,13 @@ export default function Entries() {
     c.entry = c.entry || []
     let idx = editing.index
     if (idx >= 0) {
-      // 保存时按 key 重新定位, 防止弹窗期间配置被外部修改导致错位覆盖
-      idx = findIdx(c.entry, editing.key)
-      if (idx < 0) { toast('该条目已被删除, 保存取消', true); setEditing(null); return }
+      // 先用已存下标 (弹窗期间配置未变时直接命中), 不匹配再按 key 重定位,
+      // 防止配置被外部修改导致错位覆盖
+      const at = c.entry[idx]
+      if (!at || keyOf(at) !== editing.key) {
+        idx = findIdx(c.entry, editing.key)
+        if (idx < 0) { toast('该条目已被删除, 保存取消', true); setEditing(null); return }
+      }
       c.entry[idx] = editing.data
     } else c.entry.push(editing.data)
     api('/api/config', 'PUT', c)
@@ -71,7 +75,7 @@ export default function Entries() {
         <button className="btn primary" onClick={() => setEditing({ index: -1, key: '', data: emptyEntry() })}>新增线路</button>
       </div>
       {entries.map((e, i) => (
-        <div className="card" key={e.key}>
+        <div className="card" key={e.key + '#' + i}>
           <h3><span className={`dot ${e.healthy ? 'up' : 'down'}`}></span>{e.key} {e.enable ? '' : '(已禁用)'}</h3>
           <div className="row">
             <span>活跃会话 <b>{e.active_sessions}</b> / {e.max_session || '不限'}</span>

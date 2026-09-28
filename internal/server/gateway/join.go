@@ -103,6 +103,8 @@ func (h *joinHandler) motd(c *gin.Context) {
 					return
 				}
 			case <-c.Request.Context().Done():
+				// 等待方被取消必须显式写状态, 否则 gin 默认返回 200 空 body
+				writeText(c, http.StatusServiceUnavailable, "request cancelled")
 				return
 			}
 			// 回源失败, 走正常转发

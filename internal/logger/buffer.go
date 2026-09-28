@@ -85,7 +85,8 @@ func (r *ringBuffer) append(e LogEntry) {
 // bufHandler 包装 slog.Handler, 同时写入内存缓冲
 type bufHandler struct {
 	slog.Handler
-	attrs []slog.Attr // WithAttrs 绑定的属性 (Handle 时一并写入缓冲)
+	attrs  []slog.Attr // WithAttrs 绑定的属性 (Handle 时一并写入缓冲)
+	groups []string    // WithGroup 累积的分组前缀
 }
 
 // WithAttrs 保持缓冲包装并累积绑定属性, 防止派生 logger 绕过内存缓冲
@@ -93,29 +94,40 @@ func (h bufHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	merged := make([]slog.Attr, 0, len(h.attrs)+len(attrs))
 	merged = append(merged, h.attrs...)
 	merged = append(merged, attrs...)
-	return bufHandler{h.Handler.WithAttrs(attrs), merged}
+	return bufHandler{h.Handler.WithAttrs(attrs), merged, h.groups}
 }
 
-// WithGroup 保持缓冲包装
+// WithGroup 保持缓冲包装并记录分组前缀 (空 group 按 slog 语义不嵌套)
 func (h bufHandler) WithGroup(name string) slog.Handler {
-	return bufHandler{h.Handler.WithGroup(name), h.attrs}
+	if name == "" {
+		return h
+	}
+	groups := append(append([]string(nil), h.groups...), name)
+	return bufHandler{h.Handler.WithGroup(name), h.attrs, groups}
 }
 
 func (h bufHandler) Handle(ctx context.Context, r slog.Record) error {
 	var sb strings.Builder
-	writeAttr := func(a slog.Attr) {
+	// group 前缀只作用于记录本身的属性 (绑定属性在 group 之前绑定)
+	prefix := strings.Join(h.groups, ".")
+	writeAttr := func(a slog.Attr, grouped bool) {
+		a.Value = a.Value.Resolve() // 展开 LogValuer
 		if sb.Len() > 0 {
 			sb.WriteByte(' ')
+		}
+		if grouped && prefix != "" {
+			sb.WriteString(prefix)
+			sb.WriteByte('.')
 		}
 		sb.WriteString(a.Key)
 		sb.WriteByte('=')
 		sb.WriteString(a.Value.String())
 	}
 	for _, a := range h.attrs {
-		writeAttr(a)
+		writeAttr(a, false)
 	}
 	r.Attrs(func(a slog.Attr) bool {
-		writeAttr(a)
+		writeAttr(a, true)
 		return true
 	})
 	logBuf.append(LogEntry{Time: r.Time, Level: r.Level.String(), Msg: r.Message, Attrs: sb.String()})

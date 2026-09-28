@@ -48,9 +48,20 @@ func newEntryBalancer(store *conf.Store, table *session.Table, tracker *multiple
 // pick 选择当前会话数最少且未满的健康线路, 选中后立即计数; 无可用线路时返回错误
 func (b *entryBalancer) pick() (*conf.EntryConf, error) {
 	cfg := b.store.Get()
+	b.mu.Lock()
+	// 清理已从配置中删除的线路计数与指标序列 (禁用条目保留, 会话可能仍在)
+	valid := make(map[string]bool, len(cfg.Entry))
+	for i := range cfg.Entry {
+		valid[multiplexer.EntryKey(&cfg.Entry[i])] = true
+	}
+	for key := range b.counts {
+		if !valid[key] {
+			delete(b.counts, key)
+			entryActiveSessions.DeleteLabelValues(key)
+		}
+	}
 	best, bestN := -1, int(^uint(0)>>1)
 
-	b.mu.Lock()
 	for i := range cfg.Entry {
 		e := &cfg.Entry[i]
 		if !e.Enable {

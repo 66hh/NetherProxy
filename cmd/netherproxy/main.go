@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -25,6 +26,11 @@ const (
 )
 
 func main() {
+	// 经 run 返回退出码, 保证 defer (日志文件关闭等) 在退出前执行
+	os.Exit(run())
+}
+
+func run() int {
 
 	cfg, err := conf.Load(configPath)
 
@@ -65,7 +71,7 @@ func main() {
 	if err := mux.Start(); err != nil {
 		logger.Error("multiplexer start failed", "err", err)
 		tracker.Close()
-		os.Exit(1)
+		return 1
 	}
 
 	heartbeat := multiplexer.NewHeartbeat(store, tracker)
@@ -73,8 +79,8 @@ func main() {
 
 	gw := gateway.New(store, mux, tracker)
 
-	// 打印面板地址与 token
-	panelHost := cfg.Gateway.Host
+	// 打印面板地址与 token (配置里手写的 IPv6 地址可能带方括号, 先剥掉再拼端口)
+	panelHost := strings.TrimPrefix(strings.TrimSuffix(cfg.Gateway.Host, "]"), "[")
 	if panelHost == "0.0.0.0" || panelHost == "::" || panelHost == "" {
 		panelHost = "127.0.0.1"
 	}
@@ -93,25 +99,26 @@ func main() {
 		errCh <- gw.Start()
 	}()
 
-	// 等待退出信号; 第二次信号强制退出
+	// 等待退出信号
 	quit := make(chan os.Signal, 2)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	var serveErr error
 	select {
 	case sig := <-quit:
 		logger.Info("shutdown signal received", "signal", sig.String())
-		// 仅在收到第一次信号后才监听第二次信号强制退出
-		go func() {
-			<-quit
-			logger.Warn("second signal received, forcing exit")
-			os.Exit(1)
-		}()
 	case err := <-errCh:
 		if err != nil {
 			logger.Error("gateway stopped with error", "err", err)
 			serveErr = err
 		}
 	}
+	// 关闭过程中收到第二次信号强制退出; 无条件启动,
+	// errCh 分支 (启动失败) 下关闭卡住时也能被打断
+	go func() {
+		<-quit
+		logger.Warn("second signal received, forcing exit")
+		os.Exit(1)
+	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -133,8 +140,9 @@ func main() {
 
 	// 启动失败以非零码退出, 便于守护进程识别
 	if serveErr != nil {
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }
 
 // fatal 在日志器就绪前输出错误并退出

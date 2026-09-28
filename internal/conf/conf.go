@@ -75,7 +75,7 @@ type GatewayConf struct {
 
 // 端口复用器配置
 type MultiplexerConf struct {
-	Host string `yaml:"host" json:"host"` // 复用器主机
+	Host string `yaml:"host" json:"host"` // 复用器监听地址: 空/0.0.0.0/:: 同时监听 IPv4+IPv6 (v6 不可用时降级 v4); 指定具体地址只听对应协议
 	Port int    `yaml:"port" json:"port"` // 复用器端口
 }
 
@@ -170,7 +170,7 @@ func (h HeartbeatConf) TimeoutDuration() time.Duration {
 // 公网线路配置 (客户端实际连接的地址需要映射到复用器上), 支持填写多条线路网关将会自动平均
 type EntryConf struct {
 	Enable     bool          `yaml:"enable" json:"enable"`           // 是否启用
-	Host       string        `yaml:"host" json:"host"`               // 公网线路主机
+	Host       string        `yaml:"host" json:"host"`               // 公网线路主机 (IPv4/IPv6/域名, 域名优先解析 A 记录, 无 A 时用 AAAA)
 	Port       int           `yaml:"port" json:"port"`               // 公网线路端口
 	MaxSession int           `yaml:"max_session" json:"max_session"` // 最大会话数, 0 表示不限制
 	Heartbeat  HeartbeatConf `yaml:"heartbeat" json:"heartbeat"`     // 心跳探测配置
@@ -272,7 +272,7 @@ func (c *Conf) Validate() error {
 		if !found {
 			p = route
 		}
-		if p == "/api/config" || strings.HasPrefix(p, "/api/session/") {
+		if p == "/api/config" || p == "/api/config/reload" || strings.HasPrefix(p, "/api/session/") {
 			errs = append(errs, fmt.Errorf("gateway.api_auth_exempt: write-capable route %q must not be exempt", route))
 		}
 	}
@@ -322,8 +322,12 @@ func (c *Conf) Validate() error {
 			errs = append(errs, fmt.Errorf("%s: invalid duration %q", item.field, item.value))
 		}
 	}
-	if c.Session.IdleReap() < c.Session.ActiveIdle() {
-		errs = append(errs, errors.New("session.idle_reap_timeout: must be >= session.active_idle_timeout"))
+	// 仅当两个原始字段都能解析且 > 0 时才交叉比较, 避免单字段非法时
+	// getter 回退默认值产生针对用户未配置值的误导性二次报错
+	if ai, err1 := time.ParseDuration(c.Session.ActiveIdleTimeout); err1 == nil && ai > 0 {
+		if ir, err2 := time.ParseDuration(c.Session.IdleReapTimeout); err2 == nil && ir > 0 && ir < ai {
+			errs = append(errs, errors.New("session.idle_reap_timeout: must be >= session.active_idle_timeout"))
+		}
 	}
 
 	seenDomains := make(map[string]bool)
@@ -341,7 +345,8 @@ func (c *Conf) Validate() error {
 			seenDomains[domain] = true
 		}
 
-		if bds.Domain == "" {
+		// 必填判断用归一化后的值: 纯空白 domain 是永不匹配的死条目, 必须拒绝
+		if domain == "" {
 			errs = append(errs, fmt.Errorf("bds[%d].domain: required when enabled", i))
 		}
 

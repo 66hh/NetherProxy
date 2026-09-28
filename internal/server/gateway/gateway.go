@@ -159,7 +159,8 @@ func (g *Gateway) startDual(cfg conf.GatewayConf) error {
 	}
 	tlsCfg := g.srv.TLSConfig.Clone()
 	tlsCfg.Certificates = []tls.Certificate{cert}
-	tlsCfg.NextProtos = []string{"h2", "http/1.1"}
+	// 不通告 h2: dual 模式走 srv.Serve 不会自动装配 HTTP/2,
+	// 协商出 h2 会导致浏览器断连; NextProtos 留空默认仅 http/1.1
 
 	ln, err := net.Listen("tcp", g.srv.Addr)
 	if err != nil {
@@ -173,6 +174,9 @@ func (g *Gateway) startDual(cfg conf.GatewayConf) error {
 	go func() { errCh <- g.srv.Serve(plainLn) }()
 	go func() { errCh <- g.srv.Serve(tlsLn) }()
 	err = <-errCh
+	// 单边退出时关闭底层 listener 让另一边也随之退出并回收, 防止泄漏
+	_ = ln.Close()
+	<-errCh
 	// Shutdown 先关底层 listener, Serve 返回 net.ErrClosed 属正常关闭
 	if errors.Is(err, net.ErrClosed) {
 		return nil

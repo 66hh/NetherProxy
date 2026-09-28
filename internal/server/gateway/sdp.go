@@ -181,6 +181,10 @@ func RewriteOffer(body []byte) ([]byte, error) {
 	if ufrag == "" {
 		return nil, errors.New("missing ice-ufrag in offer")
 	}
+	// ufrag 来自客户端且会被拼进 candidate 行, 必须白名单校验防止 SDP 注入
+	if !validICEUfrag(ufrag) {
+		return nil, errors.New("invalid ice-ufrag in offer")
+	}
 
 	out := make([]string, 0, len(lines)+1)
 	replaced := false
@@ -201,6 +205,20 @@ func RewriteOffer(body []byte) ([]byte, error) {
 		sep = "\r\n"
 	}
 	return []byte(strings.Join(out, sep)), nil
+}
+
+// validICEUfrag 校验 ice-ufrag: 长度 4-256, 仅含可见 ASCII (0x21-0x7e)。
+// ufrag 会被拼接进 SDP candidate 行, 排除空格/控制字符防止换行注入。
+func validICEUfrag(s string) bool {
+	if len(s) < 4 || len(s) > 256 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x21 || s[i] > 0x7e {
+			return false
+		}
+	}
+	return true
 }
 
 // rewriteCandidateAddr 以模板 candidate 行为基础, 仅替换 IP 与端口字段

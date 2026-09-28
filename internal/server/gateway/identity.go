@@ -181,7 +181,11 @@ func (v *identityVerifier) publicKey(kid string) (*rsa.PublicKey, error) {
 		backoff = 10 * time.Second
 	}
 	v.fetchMu.Lock()
-	if time.Since(v.lastFetch) >= backoff {
+	// lastFetch 由 fetchKeys 在 v.mu 下写入, 读取必须持同一把锁
+	v.mu.RLock()
+	stale := time.Since(v.lastFetch) >= backoff
+	v.mu.RUnlock()
+	if stale {
 		v.fetchKeys() // 内部持写锁, 失败也更新 lastFetch
 	}
 	v.fetchMu.Unlock()

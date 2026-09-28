@@ -42,9 +42,7 @@ export default function Entries() {
       .catch(e => toast(e.message, true))
   }
 
-  function findIdx(list, key) {
-    return (list || []).findIndex(e => (e.host.includes(':') ? `[${e.host}]:${e.port}` : `${e.host}:${e.port}`) === key)
-  }
+  function findIdx(list, key) { return (list || []).findIndex(e => keyOf(e) === key) }
 
   function keyOf(e) { return e.host.includes(':') ? `[${e.host}]:${e.port}` : `${e.host}:${e.port}` }
 
@@ -58,10 +56,13 @@ export default function Entries() {
     setEditing({ index: idx, key, data: JSON.parse(JSON.stringify(cfg.entry[idx])) })
   }
 
-  function del(key) {
+  function del(key, i) {
     if (!cfg) { toast('配置加载中, 请稍后', true); return }
     if (!confirm('删除线路 ' + key + '?')) return
-    const idx = findIdx(cfg.entry, key)
+    // 与 openEdit 一致: 优先渲染下标 (重复 key 的禁用条目), 不匹配再退化 key 查找
+    let idx = i
+    const at = cfg.entry && cfg.entry[i]
+    if (!at || keyOf(at) !== key) idx = findIdx(cfg.entry, key)
     if (idx < 0) { toast('配置已变化, 请重试', true); refresh(); return }
     const c = JSON.parse(JSON.stringify(cfg))
     c.entry.splice(idx, 1)
@@ -85,7 +86,7 @@ export default function Entries() {
               : <span>心跳未开启</span>}
             <span style={{ flex: 1 }}></span>
             <button className="btn small" onClick={() => openEdit(e.key, i)}>编辑</button>
-            <button className="btn small danger" onClick={() => del(e.key)}>删除</button>
+            <button className="btn small danger" onClick={() => del(e.key, i)}>删除</button>
           </div>
           <StatusBar stats={e.stats} />
         </div>

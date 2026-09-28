@@ -88,21 +88,28 @@ func (m *Multiplexer) Start() error {
 	host := strings.TrimPrefix(strings.TrimSuffix(cfg.Host, "]"), "[")
 	port := strconv.Itoa(cfg.Port)
 
+	// 不变量: required socket 恒为列表首位或单独存在, 失败时无任何已打开
+	// socket, 无泄漏; optional 失败仅降级警告
 	sockets := []struct {
 		network  string
 		required bool
 	}{{"udp4", true}, {"udp6", false}}
-	// 通配地址 (空/0.0.0.0/::) 不进入单栈分支: 用户写 0.0.0.0 意为"所有接口",
-	// 应同时监听两个协议族
-	if ip, err := netip.ParseAddr(host); err == nil && !ip.IsUnspecified() {
-		if ip.Is4() {
-			sockets = sockets[:1]
-		} else {
-			sockets = []struct {
-				network  string
-				required bool
-			}{{"udp6", true}}
+	if ip, err := netip.ParseAddr(host); err == nil {
+		// 通配地址 (空/0.0.0.0/::) 不进入单栈分支: 用户写 0.0.0.0 意为
+		// "所有接口", 应同时监听两个协议族
+		if !ip.IsUnspecified() {
+			if ip.Is4() {
+				sockets = sockets[:1]
+			} else {
+				sockets = []struct {
+					network  string
+					required bool
+				}{{"udp6", true}}
+			}
 		}
+	} else if host != "" {
+		// 主机名: 解析结果的地址族未知, 两个协议族都可选, 至少一个成功即可
+		sockets[0].required = false
 	}
 
 	for _, s := range sockets {
@@ -118,7 +125,7 @@ func (m *Multiplexer) Start() error {
 			if s.required {
 				return fmt.Errorf("resolve multiplexer addr: %w", err)
 			}
-			logger.Warn("ipv6 resolve unavailable, ipv4 only", "err", err)
+			logger.Warn("optional listen resolve failed", "network", s.network, "err", err)
 			continue
 		}
 		conn, err := net.ListenUDP(s.network, udpAddr)
@@ -126,7 +133,7 @@ func (m *Multiplexer) Start() error {
 			if s.required {
 				return fmt.Errorf("listen udp: %w", err)
 			}
-			logger.Warn("ipv6 listen unavailable, ipv4 only", "err", err)
+			logger.Warn("optional listen failed", "network", s.network, "err", err)
 			continue
 		}
 		if s.network == "udp6" {
@@ -144,6 +151,10 @@ func (m *Multiplexer) Start() error {
 		} else {
 			m.public6 = conn
 		}
+	}
+
+	if m.public4 == nil && m.public6 == nil {
+		return errors.New("multiplexer: no listen socket available")
 	}
 
 	m.registerSessionMetrics()
@@ -453,13 +464,17 @@ func (m *Multiplexer) writePublic(pkt []byte, dst netip.AddrPort) error {
 
 // setV6Only 显式设置 IPV6_V6ONLY, 防止 v4 包以 4-in-6 映射地址进入 v6
 // socket (Linux 默认关闭 v6only), 导致 5-tuple 查找失配丢包。
+// 失败仅记 debug: writePublic 的 Unmap 防御可兜底, 功能不受影响。
 func setV6Only(conn *net.UDPConn) {
 	raw, err := conn.SyscallConn()
 	if err != nil {
+		logger.Debug("get raw conn failed, v6only not set", "err", err)
 		return
 	}
 	_ = raw.Control(func(fd uintptr) {
-		_ = setsockoptV6Only(fd)
+		if err := setsockoptV6Only(fd); err != nil {
+			logger.Debug("set v6only failed", "err", err)
+		}
 	})
 }
 

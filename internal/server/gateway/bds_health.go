@@ -324,6 +324,9 @@ func (w *bdsWorker) run(ctx context.Context) {
 
 // probeOnce 执行一次 HTTP GET /v1/join 探测
 func (w *bdsWorker) probeOnce(ctx context.Context, hb conf.HeartbeatConf) {
+	if ctx.Err() != nil {
+		return // worker 已停止 (配置变更/关闭), 不记录假探测失败
+	}
 	timeout := hb.TimeoutDuration()
 	pctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()

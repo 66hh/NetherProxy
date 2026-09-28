@@ -89,7 +89,8 @@ bds:
 ```yaml
 entry:
   - enable: true
-    host: 1.2.3.4        # 公网地址 (客户端实际连接, 需映射到 multiplexer); 支持 IPv4/IPv6/域名 (域名优先 A 记录, 无 A 用 AAAA)
+    host: 1.2.3.4        # 公网地址 (客户端实际连接, 需映射到 multiplexer); 支持 IPv4/IPv6/域名
+                         # (IPv6 字面量带不带方括号均可, 内部自动归一化; 域名优先 A 记录, 无 A 用 AAAA)
     port: 19131
     max_session: 100     # 最大会话数, 0 不限; 多条线路按最少会话数均衡
     heartbeat:           # 线路心跳 (UDP NPING/NPONG, 不转发到 BDS)

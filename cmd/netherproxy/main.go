@@ -8,7 +8,6 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -70,6 +69,7 @@ func run() int {
 	mux := multiplexer.New(store, table, tracker)
 	if err := mux.Start(); err != nil {
 		logger.Error("multiplexer start failed", "err", err)
+		table.Close()
 		tracker.Close()
 		return 1
 	}
@@ -79,10 +79,13 @@ func run() int {
 
 	gw := gateway.New(store, mux, tracker)
 
-	// 打印面板地址与 token (配置里手写的 IPv6 地址可能带方括号, 先剥掉再拼端口)
-	panelHost := strings.TrimPrefix(strings.TrimSuffix(cfg.Gateway.Host, "]"), "[")
-	if panelHost == "0.0.0.0" || panelHost == "::" || panelHost == "" {
+	// 打印面板地址与 token (normalize 已剥方括号并规范化主机字段)
+	panelHost := cfg.Gateway.Host
+	switch panelHost {
+	case "0.0.0.0", "":
 		panelHost = "127.0.0.1"
+	case "::":
+		panelHost = "::1"
 	}
 	scheme := "http"
 	if cfg.Gateway.TLS.Enable {

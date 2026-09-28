@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/netip"
 	"sync"
@@ -98,11 +99,18 @@ func (b *entryBalancer) release(key string) {
 		return
 	}
 	b.mu.Lock()
-	if b.counts[key] > 0 {
-		b.counts[key]--
+	n, ok := b.counts[key]
+	if !ok {
+		// 线路已从配置删除, 指标序列已随 pick 的清理移除, 不再复活
+		b.mu.Unlock()
+		return
+	}
+	if n > 0 {
+		n--
+		b.counts[key] = n
 	}
 	b.mu.Unlock()
-	b.syncMetric(key)
+	entryActiveSessions.WithLabelValues(key).Set(float64(n))
 }
 
 // syncMetric 将线路计数同步到 Prometheus 指标
@@ -137,10 +145,15 @@ type dnsCacheEnt struct {
 const dnsCacheTTL = 30 * time.Second
 
 // resolveEntryIP 将线路主机解析为 IP: 本身是 IP 直接用, 域名走 DNS 解析
-// (优先 IPv4, 5s 超时, 30s 缓存防止热路径被 DNS 抖动拖慢)
+// (优先 IPv4, 5s 超时, 30s 缓存防止热路径被 DNS 抖动拖慢)。
+// 返回值保证 Unmap 后的纯 v4/v6 地址: 4-in-6 映射地址与带 zone 的地址
+// 写进 SDP candidate 是非法的 (RFC 5245 connection-address 不允许 zone)。
 func resolveEntryIP(host string) (netip.Addr, error) {
 	if ip, err := netip.ParseAddr(host); err == nil {
-		return ip, nil
+		if ip.Zone() != "" {
+			return netip.Addr{}, fmt.Errorf("entry host %q: zone id not allowed", host)
+		}
+		return ip.Unmap(), nil
 	}
 	if ent, ok := dnsCache.Load(host); ok {
 		e := ent.(*dnsCacheEnt)
@@ -171,6 +184,7 @@ func resolveEntryIP(host string) (netip.Addr, error) {
 			return netip.Addr{}, err
 		}
 	}
+	ip = ip.Unmap() // 与字面量路径一致: 不进 SDP 的映射地址
 	dnsCache.Store(host, &dnsCacheEnt{ip: ip, expires: time.Now().Add(dnsCacheTTL)})
 	return ip, nil
 }

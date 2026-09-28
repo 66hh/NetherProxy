@@ -534,6 +534,7 @@ func (w *hbWorker) probeOnce(hb conf.HeartbeatConf) {
 	}
 	conn, err := net.DialUDP("udp", nil, w.raddr)
 	if err != nil {
+		w.raddr = nil // 与写/读失败路径一致, 下轮重新解析
 		w.recordResult(0, fmt.Errorf("dial entry: %w", err), hb)
 		return
 	}

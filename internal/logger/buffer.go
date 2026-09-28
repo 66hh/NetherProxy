@@ -85,15 +85,24 @@ func (r *ringBuffer) append(e LogEntry) {
 // bufHandler 包装 slog.Handler, 同时写入内存缓冲
 type bufHandler struct {
 	slog.Handler
-	attrs  []slog.Attr // WithAttrs 绑定的属性 (Handle 时一并写入缓冲)
+	attrs  []boundAttr // WithAttrs 绑定的属性 (Handle 时一并写入缓冲)
 	groups []string    // WithGroup 累积的分组前缀
+}
+
+// boundAttr 绑定的属性及其绑定时的 group 深度
+// (slog 语义: 组只作用于组打开之后绑定的属性)
+type boundAttr struct {
+	attr  slog.Attr
+	depth int
 }
 
 // WithAttrs 保持缓冲包装并累积绑定属性, 防止派生 logger 绕过内存缓冲
 func (h bufHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	merged := make([]slog.Attr, 0, len(h.attrs)+len(attrs))
+	merged := make([]boundAttr, 0, len(h.attrs)+len(attrs))
 	merged = append(merged, h.attrs...)
-	merged = append(merged, attrs...)
+	for _, a := range attrs {
+		merged = append(merged, boundAttr{a, len(h.groups)})
+	}
 	return bufHandler{h.Handler.WithAttrs(attrs), merged, h.groups}
 }
 
@@ -108,26 +117,24 @@ func (h bufHandler) WithGroup(name string) slog.Handler {
 
 func (h bufHandler) Handle(ctx context.Context, r slog.Record) error {
 	var sb strings.Builder
-	// group 前缀只作用于记录本身的属性 (绑定属性在 group 之前绑定)
-	prefix := strings.Join(h.groups, ".")
-	writeAttr := func(a slog.Attr, grouped bool) {
+	writeAttr := func(a slog.Attr, depth int) {
 		a.Value = a.Value.Resolve() // 展开 LogValuer
 		if sb.Len() > 0 {
 			sb.WriteByte(' ')
 		}
-		if grouped && prefix != "" {
-			sb.WriteString(prefix)
+		if depth > 0 && depth <= len(h.groups) {
+			sb.WriteString(strings.Join(h.groups[:depth], "."))
 			sb.WriteByte('.')
 		}
 		sb.WriteString(a.Key)
 		sb.WriteByte('=')
 		sb.WriteString(a.Value.String())
 	}
-	for _, a := range h.attrs {
-		writeAttr(a, false)
+	for _, b := range h.attrs {
+		writeAttr(b.attr, b.depth)
 	}
 	r.Attrs(func(a slog.Attr) bool {
-		writeAttr(a, true)
+		writeAttr(a, len(h.groups))
 		return true
 	})
 	logBuf.append(LogEntry{Time: r.Time, Level: r.Level.String(), Msg: r.Message, Attrs: sb.String()})

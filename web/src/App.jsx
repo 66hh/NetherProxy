@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { api, getToken, setToken } from './api'
-import { connState } from './state'
 import Dashboard from './pages/Dashboard'
 import Sessions from './pages/Sessions'
 import Entries from './pages/Entries'
@@ -15,10 +14,10 @@ function ConnState() {
   const [ok, setOk] = useState(true)
   useEffect(() => {
     let dead = false
-    // 主动探测 (healthz 默认豁免认证), 不依赖当前页面是否有轮询
+    // 主动探测 (healthz 默认豁免认证): 能收到任何 HTTP 响应即视为连接正常
     const check = () => fetch('/api/healthz')
-      .then(r => { connState.failed = false; if (!dead) setOk(r.ok) })
-      .catch(() => { connState.failed = true; if (!dead) setOk(false) })
+      .then(() => { if (!dead) setOk(true) })
+      .catch(() => { if (!dead) setOk(false) })
     check()
     const t = setInterval(check, 5000)
     return () => { dead = true; clearInterval(t) }
@@ -47,7 +46,7 @@ export default function App() {
     if (!getToken()) return
     api('/api/session')
       .then(() => { setAuthed(true); refresh() })
-      .catch(() => {})
+      .catch(e => { if (e.network) toast('无法连接到服务, 请确认代理已启动', true) })
   }, [])
 
   if (!authed) {
@@ -63,8 +62,10 @@ export default function App() {
               .then(() => { setAuthed(true); refresh() })
               .catch(err => {
                 setToken('')
-                // 网络层失败是服务不可达而非令牌问题, 分开提示
-                toast(err.network ? '无法连接到服务, 请确认代理已启动' : '令牌无效', true)
+                // 区分: 网络错误=服务不可达, 401=令牌无效, 其他原样展示
+                if (err.network) toast('无法连接到服务, 请确认代理已启动', true)
+                else if (err.message === 'unauthorized') toast('令牌无效', true)
+                else toast(err.message, true)
               })
           }}>
             <label className="fld"><span>Token (gateway.token)</span>

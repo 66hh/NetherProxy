@@ -115,8 +115,13 @@ func (h *joinHandler) motd(c *gin.Context) {
 			}()
 		}
 	}
-	motdTotal.WithLabelValues("ok").Inc()
 	h.forward(c, backend, nil, func(status int, contentType string, respBody []byte) []byte {
+		// 拿到后端响应才计数, 按状态分类 (bds 下线/不可达在 forward 内直接返回, 不计入)
+		if status == http.StatusOK {
+			motdTotal.WithLabelValues("ok").Inc()
+		} else {
+			motdTotal.WithLabelValues("backend_error").Inc()
+		}
 		if status == http.StatusOK && ttl > 0 {
 			h.cacheMotd(key, status, contentType, respBody, ttl)
 		}

@@ -50,7 +50,7 @@ type WebhookConf struct {
 	Timeout string `yaml:"timeout" json:"timeout"` // 调用超时, 如 "3s"
 }
 
-// join 频率限制配置: 按 XUID 滑动窗口限流
+// join 频率限制配置: 按 XUID 固定窗口限流
 type RateLimitConf struct {
 	Enable   bool   `yaml:"enable" json:"enable"`       // 是否启用
 	Interval string `yaml:"interval" json:"interval"`   // 窗口长度, 如 "60s"

@@ -13,6 +13,9 @@ import (
 // splitDualListener 把 TCP listener 按首字节分流为明文与 TLS 两个 listener:
 // TLS 握手记录首字节为 0x16 (handshake), 明文 HTTP 请求首字节为方法字母。
 // 用于同端口同时支持 HTTP 与 HTTPS (安卓客户端仅 HTTP, iOS 仅 HTTPS)。
+//
+// 注意: TLS 在 listener 层终止, http.Server 无感知, 因此 dual 模式下
+// 处理器内 c.Request.TLS 恒为 nil, 不要依赖它判断 scheme。
 func splitDualListener(ln net.Listener, tlsCfg *tls.Config) (plain net.Listener, secure net.Listener) {
 	p := newChanListener(ln.Addr())
 	s := newChanListener(ln.Addr())

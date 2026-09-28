@@ -4,8 +4,10 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"net/netip"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -111,14 +113,18 @@ func Load(path string) (*Conf, error) {
 }
 
 // normalize 为数组条目填充缺省字段: yaml 数组整体替换默认数组,
-// 条目内未写的子字段需要单独补默认值
+// 条目内未写的子字段需要单独补默认值; 同时规范化全部主机字段
 func normalize(c *Conf) {
 	for i := range c.BDS {
+		c.BDS[i].Host = NormalizeHost(c.BDS[i].Host)
 		fillHeartbeatDefaults(&c.BDS[i].Heartbeat)
 	}
 	for i := range c.Entry {
+		c.Entry[i].Host = NormalizeHost(c.Entry[i].Host)
 		fillHeartbeatDefaults(&c.Entry[i].Heartbeat)
 	}
+	c.Gateway.Host = NormalizeHost(c.Gateway.Host)
+	c.Multiplexer.Host = NormalizeHost(c.Multiplexer.Host)
 	// 其他标量缺省
 	if c.Gateway.MotdCache == "" {
 		c.Gateway.MotdCache = "0s"
@@ -126,6 +132,19 @@ func normalize(c *Conf) {
 	if c.Stats.FlushInterval == "" {
 		c.Stats.FlushInterval = "30s"
 	}
+}
+
+// NormalizeHost 规范化主机字段: trim、剥 IPv6 方括号 ([::1] -> ::1)、
+// IP 统一为规范表示 (含 4-in-6 Unmap)、域名小写。
+// 保证配置校验的去重键与运行时 EntryKey/监听地址一致,
+// 带括号或大小写混写的同一地址不会被判为两条线路。
+func NormalizeHost(host string) string {
+	host = strings.TrimSpace(host)
+	host = strings.TrimPrefix(strings.TrimSuffix(host, "]"), "[")
+	if ip, err := netip.ParseAddr(host); err == nil {
+		return ip.Unmap().String()
+	}
+	return strings.ToLower(host)
 }
 
 // fillHeartbeatDefaults 填充心跳配置的缺省值

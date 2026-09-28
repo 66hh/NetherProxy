@@ -8,8 +8,6 @@ export function setToken(t) {
   else localStorage.removeItem('np_token')
 }
 
-import { connState } from './state'
-
 export async function api(path, method = 'GET', body, opts = {}) {
   const hadToken = !!token
   let resp
@@ -22,13 +20,10 @@ export async function api(path, method = 'GET', body, opts = {}) {
       body: body ? JSON.stringify(body) : undefined,
     })
   } catch (e) {
-    // 网络层失败 (服务宕机/断网): 标记断连并打上标记, 调用方可区分"服务不可达"
-    connState.failed = true
+    // 网络层失败 (服务宕机/断网): 打上标记, 调用方可区分"服务不可达"
     e.network = true
     throw e
   }
-  // 收到任何 HTTP 响应都说明连接正常 (含 400/404 等业务错误)
-  connState.failed = false
   if (resp.status === 401) {
     // 会话过期才刷新回登录页; 登录尝试本身由调用方提示
     if (hadToken && !opts.noRedirect) {
@@ -41,4 +36,3 @@ export async function api(path, method = 'GET', body, opts = {}) {
   if (!resp.ok) throw new Error(data.details || data.error || 'HTTP ' + resp.status)
   return data
 }
-

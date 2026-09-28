@@ -73,6 +73,8 @@ tbody tr:hover { background: rgba(88,166,255,.05); }
   padding: 3px 10px; pointer-events: none; }
 .chart-tip i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; }
 .tip-time { color: var(--dim); }
+
+.lang-select { width: auto; padding: 3px 6px; font-size: 12px; }
 .legend { display: flex; gap: 16px; color: var(--dim); font-size: 12px; margin-bottom: 6px; }
 .legend i { display: inline-block; width: 10px; height: 3px; border-radius: 2px; margin-right: 5px; vertical-align: middle; }
 

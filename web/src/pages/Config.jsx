@@ -1,60 +1,63 @@
 import React, { useContext } from 'react'
 import { api } from '../api'
+import { t } from '../i18n'
 import { ToastCtx, ConfigCtx } from '../App'
 import { Switch, Field } from '../components/Modal'
 
+// 字段标签与分组名存 i18n key, 渲染时翻译
 const SCHEMA = [
-  { group: '日志', fields: [
-    ['log.level', '级别', 'select', ['debug', 'info', 'warn', 'error']],
-    ['log.format', '格式', 'select', ['text', 'json']],
-    ['log.file', '日志文件 (留空仅控制台)', 'text'],
-    ['log.max_size', '单文件大小 (MB, 0=100)', 'number'],
-    ['log.max_backups', '保留份数 (0 不限)', 'number'],
-    ['log.max_age', '保留天数 (0 不限)', 'number'],
-    ['log.compress', '压缩旧日志', 'bool'],
+  { group: 'cfg.group.log', fields: [
+    ['log.level', 'cfg.f.log.level', 'select', ['debug', 'info', 'warn', 'error']],
+    ['log.format', 'cfg.f.log.format', 'select', ['text', 'json']],
+    ['log.file', 'cfg.f.log.file', 'text'],
+    ['log.max_size', 'cfg.f.log.max_size', 'number'],
+    ['log.max_backups', 'cfg.f.log.max_backups', 'number'],
+    ['log.max_age', 'cfg.f.log.max_age', 'number'],
+    ['log.compress', 'cfg.f.log.compress', 'bool'],
+    ['log.buffer_size', 'cfg.f.log.buffer_size', 'number'],
   ]},
-  { group: '网关', fields: [
-    ['gateway.host', '监听主机', 'text'],
-    ['gateway.port', '监听端口', 'number'],
-    ['gateway.token', '访问令牌 (显示 *** 表示不修改)', 'text'],
-    ['gateway.verify_identity', '验证玩家身份 JWT', 'bool'],
-    ['gateway.relay_only', '中继模式 (隐藏客户端真实地址)', 'bool'],
-    ['gateway.motd_cache', 'MOTD 缓存时长 (如 5s, 0s 不缓存)', 'text'],
-    ['gateway.api_auth_exempt', '免认证 API 路由 (每行一个)', 'list'],
+  { group: 'cfg.group.gateway', fields: [
+    ['gateway.host', 'cfg.f.gateway.host', 'text'],
+    ['gateway.port', 'cfg.f.gateway.port', 'number'],
+    ['gateway.token', 'cfg.f.gateway.token', 'text'],
+    ['gateway.verify_identity', 'cfg.f.gateway.verify_identity', 'bool'],
+    ['gateway.relay_only', 'cfg.f.gateway.relay_only', 'bool'],
+    ['gateway.motd_cache', 'cfg.f.gateway.motd_cache', 'text'],
+    ['gateway.api_auth_exempt', 'cfg.f.gateway.api_auth_exempt', 'list'],
   ]},
-  { group: 'TLS', fields: [
-    ['gateway.tls.enable', '启用 TLS', 'bool'],
-    ['gateway.tls.dual', '同端口双协议 (明文 HTTP + HTTPS)', 'bool'],
-    ['gateway.tls.cert', '证书 (PEM)', 'text'],
-    ['gateway.tls.key', '私钥', 'text'],
+  { group: 'cfg.group.tls', fields: [
+    ['gateway.tls.enable', 'cfg.f.gateway.tls.enable', 'bool'],
+    ['gateway.tls.dual', 'cfg.f.gateway.tls.dual', 'bool'],
+    ['gateway.tls.cert', 'cfg.f.gateway.tls.cert', 'text'],
+    ['gateway.tls.key', 'cfg.f.gateway.tls.key', 'text'],
   ]},
-  { group: '指标', fields: [['gateway.metrics.enable', '启用 Prometheus (/api/metrics)', 'bool']]},
-  { group: '访问控制', fields: [
-    ['gateway.access.mode', '名单模式', 'select', ['off', 'blacklist', 'whitelist']],
-    ['gateway.access.xuids', 'XUID 名单 (每行一个)', 'list'],
-    ['gateway.access.webhook.enable', '启用 webhook', 'bool'],
-    ['gateway.access.webhook.url', 'webhook 地址', 'text'],
-    ['gateway.access.webhook.timeout', 'webhook 超时', 'text'],
+  { group: 'cfg.group.metrics', fields: [['gateway.metrics.enable', 'cfg.f.gateway.metrics.enable', 'bool']]},
+  { group: 'cfg.group.access', fields: [
+    ['gateway.access.mode', 'cfg.f.gateway.access.mode', 'select', ['off', 'blacklist', 'whitelist']],
+    ['gateway.access.xuids', 'cfg.f.gateway.access.xuids', 'list'],
+    ['gateway.access.webhook.enable', 'cfg.f.gateway.access.webhook.enable', 'bool'],
+    ['gateway.access.webhook.url', 'cfg.f.gateway.access.webhook.url', 'text'],
+    ['gateway.access.webhook.timeout', 'cfg.f.gateway.access.webhook.timeout', 'text'],
   ]},
-  { group: '限流', fields: [
-    ['gateway.rate_limit.enable', '启用限流', 'bool'],
-    ['gateway.rate_limit.interval', '窗口', 'text'],
-    ['gateway.rate_limit.max_joins', '每窗口最大 join', 'number'],
-    ['gateway.rate_limit.max_keys', '最大跟踪 key 数', 'number'],
+  { group: 'cfg.group.rateLimit', fields: [
+    ['gateway.rate_limit.enable', 'cfg.f.gateway.rate_limit.enable', 'bool'],
+    ['gateway.rate_limit.interval', 'cfg.f.gateway.rate_limit.interval', 'text'],
+    ['gateway.rate_limit.max_joins', 'cfg.f.gateway.rate_limit.max_joins', 'number'],
+    ['gateway.rate_limit.max_keys', 'cfg.f.gateway.rate_limit.max_keys', 'number'],
   ]},
-  { group: '复用器', fields: [
-    ['multiplexer.host', '监听主机', 'text'],
-    ['multiplexer.port', '监听端口', 'number'],
+  { group: 'cfg.group.mux', fields: [
+    ['multiplexer.host', 'cfg.f.multiplexer.host', 'text'],
+    ['multiplexer.port', 'cfg.f.multiplexer.port', 'number'],
   ]},
-  { group: '会话超时', fields: [
-    ['session.signaled_timeout', '等待首个 STUN', 'text'],
-    ['session.active_idle_timeout', '活跃转空闲', 'text'],
-    ['session.idle_reap_timeout', '空闲回收', 'text'],
-    ['session.tuple_stale_timeout', '5-tuple 软状态', 'text'],
+  { group: 'cfg.group.session', fields: [
+    ['session.signaled_timeout', 'cfg.f.session.signaled_timeout', 'text'],
+    ['session.active_idle_timeout', 'cfg.f.session.active_idle_timeout', 'text'],
+    ['session.idle_reap_timeout', 'cfg.f.session.idle_reap_timeout', 'text'],
+    ['session.tuple_stale_timeout', 'cfg.f.session.tuple_stale_timeout', 'text'],
   ]},
-  { group: '统计', fields: [
-    ['stats.status_history_size', '状态历史上限', 'number'],
-    ['stats.flush_interval', '落盘合并间隔 (如 30s)', 'text'],
+  { group: 'cfg.group.stats', fields: [
+    ['stats.status_history_size', 'cfg.f.stats.status_history_size', 'number'],
+    ['stats.flush_interval', 'cfg.f.stats.flush_interval', 'text'],
   ]},
 ]
 
@@ -65,7 +68,7 @@ export default function Config() {
   const toast = useContext(ToastCtx)
   const { cfg, version, refresh } = useContext(ConfigCtx)
 
-  if (!cfg) return <div className="card">加载中...</div>
+  if (!cfg) return <div className="card">{t('common.loading')}</div>
 
   function save() {
     const c = JSON.parse(JSON.stringify(cfg))
@@ -79,13 +82,13 @@ export default function Config() {
       setPath(c, key, v)
     }
     api('/api/config', 'PUT', c)
-      .then(r => { toast('已保存' + (r.restart_required ? ' (部分变更需重启生效)' : '')); refresh() })
+      .then(r => { toast(t('common.saved') + (r.restart_required ? t('common.restartSuffix') : '')); refresh() })
       .catch(e => toast(e.message, true))
   }
 
   function reload() {
     api('/api/config/reload', 'POST')
-      .then(() => { toast('已重载'); refresh() })
+      .then(() => { toast(t('cfg.reloaded')); refresh() })
       .catch(e => toast(e.message, true))
   }
 
@@ -93,16 +96,17 @@ export default function Config() {
     <div key={version}>
       {SCHEMA.map(g => (
         <div className="card" key={g.group}>
-          <h3>{g.group}</h3>
+          <h3>{t(g.group)}</h3>
           <div className="grid">
-            {g.fields.map(([key, label, type, opts]) => {
+            {g.fields.map(([key, labelKey, type, opts]) => {
               const id = 'cfg-' + key
+              const label = t(labelKey)
               const v = getPath(cfg, key)
               if (type === 'bool') return <BoolField key={key} id={id} label={label} value={!!v} />
               if (type === 'select') return (
                 <Field key={key} label={label}>
                   <select id={id} defaultValue={v}>
-                    {!opts.includes(v) && <option value={v}>{String(v)} (非法值)</option>}
+                    {!opts.includes(v) && <option value={v}>{String(v)} {t('cfg.invalid')}</option>}
                     {opts.map(o => <option key={o} value={o}>{o}</option>)}
                   </select>
                 </Field>)
@@ -114,8 +118,8 @@ export default function Config() {
         </div>
       ))}
       <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-        <button className="btn primary" onClick={save}>保存配置</button>
-        <button className="btn" onClick={reload}>从文件重载</button>
+        <button className="btn primary" onClick={save}>{t('cfg.save')}</button>
+        <button className="btn" onClick={reload}>{t('cfg.reload')}</button>
       </div>
     </div>
   )

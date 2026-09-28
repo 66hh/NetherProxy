@@ -1,12 +1,13 @@
 import React, { useState } from 'react'
 import { parseTime } from '../api'
+import { t, locale } from '../i18n'
 
 // LineChart 轻量 SVG 折线图 (无依赖): 渐变区域填充、X 轴时间刻度、
 // 悬停十字线 + 数值提示。series: [{key, color, label}]
 export default function LineChart({ points, series, height = 160, unit = '' }) {
   const [hover, setHover] = useState(null)
   if (!points || points.length < 2) {
-    return <div className="chart-empty">暂无数据</div>
+    return <div className="chart-empty">{t('chart.empty')}</div>
   }
   const W = 800, H = height, padL = 44, padR = 8, padT = 10, padB = 18
   const iw = W - padL - padR, ih = H - padT - padB
@@ -92,13 +93,13 @@ export default function LineChart({ points, series, height = 160, unit = '' }) {
 function fmtTime(s) {
   const d = parseTime(s)
   if (isNaN(d)) return ''
-  return d.toLocaleTimeString('zh-CN', { hour12: false })
+  return d.toLocaleTimeString(locale(), { hour12: false })
 }
 
 function fmtTimeFull(s) {
   const d = parseTime(s)
   if (isNaN(d)) return ''
-  return d.toLocaleString('zh-CN', { hour12: false })
+  return d.toLocaleString(locale(), { hour12: false })
 }
 
 function fmtVal(v) {

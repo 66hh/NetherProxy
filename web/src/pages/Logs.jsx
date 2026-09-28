@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { api } from '../api'
+import { api, parseTime } from '../api'
+import { t, locale } from '../i18n'
 
 const LEVELS = ['debug', 'info', 'warn', 'error']
 const LV_COLOR = { DEBUG: 'var(--gray)', INFO: 'var(--accent)', WARN: 'var(--yellow)', ERROR: 'var(--red)' }
@@ -27,26 +28,26 @@ export default function Logs() {
   return (
     <div className="card">
       <div className="row" style={{ marginBottom: 10 }}>
-        <span>级别</span>
+        <span>{t('logs.level')}</span>
         <select value={level} onChange={e => setLevel(e.target.value)} style={{ width: 120 }}>
           {LEVELS.map(l => <option key={l} value={l}>{l}</option>)}
         </select>
         <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
           <input type="checkbox" checked={follow} onChange={e => setFollow(e.target.checked)} style={{ width: 'auto' }} />
-          跟随滚动
+          {t('logs.follow')}
         </label>
         <span style={{ flex: 1 }}></span>
-        <span>{logs.length} 条</span>
+        <span>{t('logs.count', { n: logs.length })}</span>
       </div>
       <div className="log-box" ref={boxRef}>
         {logs.map((l, i) => (
           <div key={i} className="log-line">
-            <span className="log-time">{new Date(l.time).toLocaleTimeString('zh-CN', { hour12: false })}</span>
+            <span className="log-time">{parseTime(l.time).toLocaleTimeString(locale(), { hour12: false })}</span>
             <span className="log-level" style={{ color: LV_COLOR[l.level] || 'var(--dim)' }}>{l.level}</span>
             <span className="log-msg">{l.msg}{l.attrs ? <span className="log-attrs"> {l.attrs}</span> : null}</span>
           </div>
         ))}
-        {!logs.length && <div className="row">暂无日志</div>}
+        {!logs.length && <div className="row">{t('logs.empty')}</div>}
       </div>
     </div>
   )

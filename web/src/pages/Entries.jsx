@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useContext } from 'react'
 import { api } from '../api'
+import { t } from '../i18n'
 import { ToastCtx, ConfigCtx } from '../App'
 import StatusBar from '../components/StatusBar'
 import Modal, { Switch, Field } from '../components/Modal'
@@ -23,7 +24,7 @@ export default function Entries() {
   }, [])
 
   function save() {
-    if (!cfg) { toast('配置加载中, 请稍后', true); return }
+    if (!cfg) { toast(t('common.cfgLoading'), true); return }
     const c = JSON.parse(JSON.stringify(cfg))
     c.entry = c.entry || []
     let idx = editing.index
@@ -33,12 +34,12 @@ export default function Entries() {
       const at = c.entry[idx]
       if (!at || keyOf(at) !== editing.key) {
         idx = findIdx(c.entry, editing.key)
-        if (idx < 0) { toast('该条目已被删除, 保存取消', true); setEditing(null); return }
+        if (idx < 0) { toast(t('common.entryGone'), true); setEditing(null); return }
       }
       c.entry[idx] = editing.data
     } else c.entry.push(editing.data)
     api('/api/config', 'PUT', c)
-      .then(r => { toast('已保存' + (r.restart_required ? ' (部分变更需重启生效)' : '')); setEditing(null); refresh(); load() })
+      .then(r => { toast(t('common.saved') + (r.restart_required ? t('common.restartSuffix') : '')); setEditing(null); refresh(); load() })
       .catch(e => toast(e.message, true))
   }
 
@@ -47,61 +48,61 @@ export default function Entries() {
   function keyOf(e) { return e.host.includes(':') ? `[${e.host}]:${e.port}` : `${e.host}:${e.port}` }
 
   function openEdit(key, i) {
-    if (!cfg) { toast('配置加载中, 请稍后', true); return }
+    if (!cfg) { toast(t('common.cfgLoading'), true); return }
     // 优先用渲染下标 (同 key 多条时区分), 仅在不匹配时退化为 key 查找
     let idx = i
     const at = cfg.entry && cfg.entry[i]
     if (!at || keyOf(at) !== key) idx = findIdx(cfg.entry, key)
-    if (idx < 0) { toast('配置已变化, 请重试', true); refresh(); return }
+    if (idx < 0) { toast(t('common.cfgChanged'), true); refresh(); return }
     setEditing({ index: idx, key, data: JSON.parse(JSON.stringify(cfg.entry[idx])) })
   }
 
   function del(key, i) {
-    if (!cfg) { toast('配置加载中, 请稍后', true); return }
-    if (!confirm('删除线路 ' + key + '?')) return
+    if (!cfg) { toast(t('common.cfgLoading'), true); return }
+    if (!confirm(t('ent.delConfirm', { key }))) return
     // 与 openEdit 一致: 优先渲染下标 (重复 key 的禁用条目), 不匹配再退化 key 查找
     let idx = i
     const at = cfg.entry && cfg.entry[i]
     if (!at || keyOf(at) !== key) idx = findIdx(cfg.entry, key)
-    if (idx < 0) { toast('配置已变化, 请重试', true); refresh(); return }
+    if (idx < 0) { toast(t('common.cfgChanged'), true); refresh(); return }
     const c = JSON.parse(JSON.stringify(cfg))
     c.entry.splice(idx, 1)
-    api('/api/config', 'PUT', c).then(() => { toast('已删除'); refresh(); load() }).catch(e => toast(e.message, true))
+    api('/api/config', 'PUT', c).then(() => { toast(t('common.deleted')); refresh(); load() }).catch(e => toast(e.message, true))
   }
 
   const d = editing && editing.data
   return (
     <>
       <div style={{ marginBottom: 12 }}>
-        <button className="btn primary" onClick={() => setEditing({ index: -1, key: '', data: emptyEntry() })}>新增线路</button>
+        <button className="btn primary" onClick={() => setEditing({ index: -1, key: '', data: emptyEntry() })}>{t('ent.add')}</button>
       </div>
       {entries.map((e, i) => (
         <div className="card" key={e.key + '#' + i}>
-          <h3><span className={`dot ${e.healthy ? 'up' : 'down'}`}></span>{e.key} {e.enable ? '' : '(已禁用)'}</h3>
+          <h3><span className={`dot ${e.healthy ? 'up' : 'down'}`}></span>{e.key} {e.enable ? '' : t('common.disabled')}</h3>
           <div className="row">
-            <span>活跃会话 <b>{e.active_sessions}</b> / {e.max_session || '不限'}</span>
+            <span>{t('ent.sessions')} <b>{e.active_sessions}</b> / {e.max_session || t('ent.unlimited')}</span>
             {e.stats
-              ? <><span>探测 <b>{e.stats.total_probes}</b> 次, 失败 <b>{e.stats.failed_probes}</b></span>
+              ? <><span>{t('common.probeStats', { total: e.stats.total_probes, failed: e.stats.failed_probes })}</span>
                   <span>RTT <b>{e.stats.last_rtt_ms}ms</b></span></>
-              : <span>心跳未开启</span>}
+              : <span>{t('common.noHeartbeat')}</span>}
             <span style={{ flex: 1 }}></span>
-            <button className="btn small" onClick={() => openEdit(e.key, i)}>编辑</button>
-            <button className="btn small danger" onClick={() => del(e.key, i)}>删除</button>
+            <button className="btn small" onClick={() => openEdit(e.key, i)}>{t('common.edit')}</button>
+            <button className="btn small danger" onClick={() => del(e.key, i)}>{t('common.delete')}</button>
           </div>
           <StatusBar stats={e.stats} />
         </div>
       ))}
       {editing && (
-        <Modal title={(editing.index >= 0 ? '编辑' : '新增') + '线路'} onClose={() => setEditing(null)} onSave={save}>
-          <Field label="主机 (公网地址)"><input type="text" value={d.host} onChange={e => setEditing({ ...editing, data: { ...d, host: e.target.value } })} /></Field>
-          <Field label="端口"><input type="number" value={d.port} onChange={e => setEditing({ ...editing, data: { ...d, port: +e.target.value } })} /></Field>
-          <Field label="最大会话数 (0 不限)"><input type="number" value={d.max_session} onChange={e => setEditing({ ...editing, data: { ...d, max_session: +e.target.value } })} /></Field>
-          <Switch label="启用" value={d.enable} onChange={v => setEditing({ ...editing, data: { ...d, enable: v } })} />
-          <Switch label="心跳探测" value={d.heartbeat.enable} onChange={v => setEditing({ ...editing, data: { ...d, heartbeat: { ...d.heartbeat, enable: v } } })} />
-          <Switch label="仅记录统计 (手动下线)" value={d.heartbeat.manual_only} onChange={v => setEditing({ ...editing, data: { ...d, heartbeat: { ...d.heartbeat, manual_only: v } } })} />
-          <Field label="心跳间隔"><input type="text" value={d.heartbeat.interval} onChange={e => setEditing({ ...editing, data: { ...d, heartbeat: { ...d.heartbeat, interval: e.target.value } } })} /></Field>
-          <Field label="超时"><input type="text" value={d.heartbeat.timeout} onChange={e => setEditing({ ...editing, data: { ...d, heartbeat: { ...d.heartbeat, timeout: e.target.value } } })} /></Field>
-          <Field label="失败次数阈值"><input type="number" value={d.heartbeat.retries} onChange={e => setEditing({ ...editing, data: { ...d, heartbeat: { ...d.heartbeat, retries: +e.target.value } } })} /></Field>
+        <Modal title={editing.index >= 0 ? t('ent.editTitle') : t('ent.addTitle')} onClose={() => setEditing(null)} onSave={save}>
+          <Field label={t('ent.host')}><input type="text" value={d.host} onChange={e => setEditing({ ...editing, data: { ...d, host: e.target.value } })} /></Field>
+          <Field label={t('common.port')}><input type="number" value={d.port} onChange={e => setEditing({ ...editing, data: { ...d, port: +e.target.value } })} /></Field>
+          <Field label={t('ent.maxSession')}><input type="number" value={d.max_session} onChange={e => setEditing({ ...editing, data: { ...d, max_session: +e.target.value } })} /></Field>
+          <Switch label={t('common.enable')} value={d.enable} onChange={v => setEditing({ ...editing, data: { ...d, enable: v } })} />
+          <Switch label={t('common.hbEnable')} value={d.heartbeat.enable} onChange={v => setEditing({ ...editing, data: { ...d, heartbeat: { ...d.heartbeat, enable: v } } })} />
+          <Switch label={t('common.manualOnly')} value={d.heartbeat.manual_only} onChange={v => setEditing({ ...editing, data: { ...d, heartbeat: { ...d.heartbeat, manual_only: v } } })} />
+          <Field label={t('common.hbInterval')}><input type="text" value={d.heartbeat.interval} onChange={e => setEditing({ ...editing, data: { ...d, heartbeat: { ...d.heartbeat, interval: e.target.value } } })} /></Field>
+          <Field label={t('common.hbTimeout')}><input type="text" value={d.heartbeat.timeout} onChange={e => setEditing({ ...editing, data: { ...d, heartbeat: { ...d.heartbeat, timeout: e.target.value } } })} /></Field>
+          <Field label={t('common.hbRetries')}><input type="number" value={d.heartbeat.retries} onChange={e => setEditing({ ...editing, data: { ...d, heartbeat: { ...d.heartbeat, retries: +e.target.value } } })} /></Field>
         </Modal>
       )}
     </>

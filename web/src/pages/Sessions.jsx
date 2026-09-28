@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useContext } from 'react'
 import { api } from '../api'
+import { t } from '../i18n'
 import { ToastCtx, ConfigCtx } from '../App'
 
 function fmtBytes(n) {
@@ -27,19 +28,19 @@ export default function Sessions() {
   }, [])
 
   function kill(ufrag) {
-    if (!confirm('确认掐断会话 ' + ufrag + '?')) return
+    if (!confirm(t('sess.killConfirm', { ufrag }))) return
     api('/api/session/' + encodeURIComponent(ufrag), 'DELETE')
-      .then(() => { toast('已掐断'); load() })
+      .then(() => { toast(t('sess.killed')); load() })
       .catch(e => toast(e.message, true))
   }
 
   function block(xuid, name) {
-    if (!xuid) { toast('该会话无 XUID', true); return }
-    if (!cfg) { toast('配置加载中, 请稍后', true); return }
+    if (!xuid) { toast(t('sess.noXuid'), true); return }
+    if (!cfg) { toast(t('common.cfgLoading'), true); return }
     const mode = cfg.gateway.access.mode
     const msg = mode === 'whitelist'
-      ? '当前为白名单模式, 拉黑将切换为黑名单模式并仅保留该玩家, 确认?'
-      : `将玩家 ${name} (${xuid}) 加入黑名单?`
+      ? t('sess.blockConfirmWl')
+      : t('sess.blockConfirm', { name, xuid })
     if (!confirm(msg)) return
     const c = JSON.parse(JSON.stringify(cfg))
     c.gateway.access.mode = 'blacklist'
@@ -48,7 +49,7 @@ export default function Sessions() {
       ? [xuid]
       : [...new Set([...(c.gateway.access.xuids || []), xuid])]
     api('/api/config', 'PUT', c)
-      .then(() => { toast('已拉黑'); refresh() })
+      .then(() => { toast(t('sess.blocked')); refresh() })
       .catch(e => toast(e.message, true))
   }
 
@@ -56,7 +57,8 @@ export default function Sessions() {
     <div className="card">
       <table>
         <thead><tr>
-          <th>玩家</th><th>XUID</th><th>客户端</th><th>线路</th><th>状态</th><th>下行/上行</th><th>时长</th><th>操作</th>
+          <th>{t('sess.player')}</th><th>XUID</th><th>{t('sess.client')}</th><th>{t('sess.entry')}</th>
+          <th>{t('sess.state')}</th><th>{t('sess.traffic')}</th><th>{t('sess.age')}</th><th>{t('sess.ops')}</th>
         </tr></thead>
         <tbody>
           {sessions.map(s => (
@@ -69,14 +71,14 @@ export default function Sessions() {
               <td className="mono">{fmtBytes(s.tx_bytes)} / {fmtBytes(s.rx_bytes)}</td>
               <td>{fmtAge(s.age_seconds)}</td>
               <td>
-                <button className="btn small danger" onClick={() => kill(s.ufrag)}>掐断</button>{' '}
-                <button className="btn small" onClick={() => block(s.xuid, s.player)}>拉黑</button>
+                <button className="btn small danger" onClick={() => kill(s.ufrag)}>{t('sess.kill')}</button>{' '}
+                <button className="btn small" onClick={() => block(s.xuid, s.player)}>{t('sess.block')}</button>
               </td>
             </tr>
           ))}
         </tbody>
       </table>
-      {!sessions.length && <div className="row" style={{ marginTop: 8 }}>暂无会话</div>}
+      {!sessions.length && <div className="row" style={{ marginTop: 8 }}>{t('sess.empty')}</div>}
     </div>
   )
 }

@@ -1,4 +1,5 @@
 import React from 'react'
+import { t } from '../i18n'
 
 export default function Modal({ title, onClose, onSave, children }) {
   return (
@@ -7,8 +8,8 @@ export default function Modal({ title, onClose, onSave, children }) {
         <h2>{title}</h2>
         {children}
         <div className="ops">
-          <button className="btn" onClick={onClose}>取消</button>
-          <button className="btn primary" onClick={onSave}>保存</button>
+          <button className="btn" onClick={onClose}>{t('common.cancel')}</button>
+          <button className="btn primary" onClick={onSave}>{t('common.save')}</button>
         </div>
       </div>
     </div>

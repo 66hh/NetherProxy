@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { api, getToken, setToken } from './api'
+import { t, getLang, setLang, LANGS } from './i18n'
 import Dashboard from './pages/Dashboard'
 import Sessions from './pages/Sessions'
 import Entries from './pages/Entries'
@@ -22,7 +23,16 @@ function ConnState() {
     const t = setInterval(check, 5000)
     return () => { dead = true; clearInterval(t) }
   }, [])
-  return <span className="row"><span className={`dot ${ok ? 'up' : 'down'}`}></span>{ok ? '已连接' : '连接断开'}</span>
+  return <span className="row"><span className={`dot ${ok ? 'up' : 'down'}`}></span>{ok ? t('conn.ok') : t('conn.fail')}</span>
+}
+
+// LangSelect 语言切换器 (登录页与顶栏共用)
+function LangSelect({ lang, onChange }) {
+  return (
+    <select className="lang-select" value={lang} onChange={e => onChange(e.target.value)}>
+      {LANGS.map(l => <option key={l.id} value={l.id}>{l.label}</option>)}
+    </select>
+  )
 }
 
 export default function App() {
@@ -31,6 +41,7 @@ export default function App() {
   const [cfg, setCfg] = useState(null)
   const [cfgVersion, setCfgVersion] = useState(0)
   const [toastMsg, setToastMsg] = useState(null)
+  const [lang, setLangState] = useState(getLang())
 
   const toastTimer = useRef(null)
   const toast = useCallback((msg, isErr) => {
@@ -46,31 +57,37 @@ export default function App() {
     if (!getToken()) return
     api('/api/session')
       .then(() => { setAuthed(true); refresh() })
-      .catch(e => { if (e.network) toast('无法连接到服务, 请确认代理已启动', true) })
+      .catch(e => { if (e.network) toast(t('common.unreachable'), true) })
   }, [])
+
+  // 切换语言: 更新全局状态并重渲染整树, t() 即输出新语言
+  const changeLang = l => { setLang(l); setLangState(l) }
 
   if (!authed) {
     return (
       <ToastCtx.Provider value={toast}>
         <div className="login"><div className="card">
-          <h3>输入访问令牌</h3>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+            <LangSelect lang={lang} onChange={changeLang} />
+          </div>
+          <h3>{t('login.title')}</h3>
           <form onSubmit={e => {
             e.preventDefault()
-            const t = e.target.token.value.trim()
-            setToken(t)
+            const tk = e.target.token.value.trim()
+            setToken(tk)
             api('/api/session', 'GET', undefined, { noRedirect: true })
               .then(() => { setAuthed(true); refresh() })
               .catch(err => {
                 setToken('')
                 // 区分: 网络错误=服务不可达, 401=令牌无效, 其他原样展示
-                if (err.network) toast('无法连接到服务, 请确认代理已启动', true)
-                else if (err.message === 'unauthorized') toast('令牌无效', true)
+                if (err.network) toast(t('common.unreachable'), true)
+                else if (err.message === 'unauthorized') toast(t('login.badToken'), true)
                 else toast(err.message, true)
               })
           }}>
-            <label className="fld"><span>Token (gateway.token)</span>
+            <label className="fld"><span>{t('login.token')}</span>
               <input type="password" name="token" autoFocus /></label>
-            <button className="btn primary" style={{ width: '100%' }}>登录</button>
+            <button className="btn primary" style={{ width: '100%' }}>{t('login.submit')}</button>
           </form>
         </div></div>
         {toastMsg && <div className={`toast${toastMsg.isErr ? ' err' : ''}`}>{toastMsg.msg}</div>}
@@ -78,7 +95,10 @@ export default function App() {
     )
   }
 
-  const tabs = [['dashboard', '概览'], ['sessions', '会话'], ['entries', '线路'], ['bds', 'BDS'], ['logs', '日志'], ['config', '配置']]
+  const tabs = [
+    ['dashboard', 'nav.dashboard'], ['sessions', 'nav.sessions'], ['entries', 'nav.entries'],
+    ['bds', 'nav.bds'], ['logs', 'nav.logs'], ['config', 'nav.config'],
+  ]
   return (
     <ToastCtx.Provider value={toast}>
       <ConfigCtx.Provider value={{ cfg, version: cfgVersion, refresh }}>
@@ -86,11 +106,12 @@ export default function App() {
           <h1>NetherProxy</h1>
           <span className="spacer"></span>
           <ConnState />
-          <button className="btn" onClick={() => { setToken(''); location.reload() }}>退出</button>
+          <LangSelect lang={lang} onChange={changeLang} />
+          <button className="btn" onClick={() => { setToken(''); location.reload() }}>{t('app.logout')}</button>
         </header>
         <nav>
           {tabs.map(([k, label]) => (
-            <button key={k} className={tab === k ? 'active' : ''} onClick={() => setTab(k)}>{label}</button>
+            <button key={k} className={tab === k ? 'active' : ''} onClick={() => setTab(k)}>{t(label)}</button>
           ))}
         </nav>
         <main>

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { api } from '../api'
+import { t } from '../i18n'
 import LineChart from '../components/LineChart'
 
 function fmtRate(v) {
@@ -29,28 +30,28 @@ export default function Dashboard() {
   return (
     <>
       <div className="stat-cards">
-        <StatCard label="活跃会话" value={cur ? cur.sessions : '-'} />
-        <StatCard label="上行 (客户端→BDS)" value={cur ? fmtRate(cur.rx_rate) : '-'} color="var(--green)" />
-        <StatCard label="下行 (BDS→客户端)" value={cur ? fmtRate(cur.tx_rate) : '-'} color="var(--accent)" />
-        <StatCard label="健康线路" value={cur ? `${cur.entries_up}/${cur.entries_total}` : '-'} />
-        <StatCard label="健康 BDS" value={cur ? `${cur.bds_up}/${cur.bds_total}` : '-'} />
-        <StatCard label="累计流量" value={cur ? fmtBytes(cur.total_rx + cur.total_tx) : '-'} />
+        <StatCard label={t('dash.sessions')} value={cur ? cur.sessions : '-'} />
+        <StatCard label={t('dash.up')} value={cur ? fmtRate(cur.rx_rate) : '-'} color="var(--green)" />
+        <StatCard label={t('dash.down')} value={cur ? fmtRate(cur.tx_rate) : '-'} color="var(--accent)" />
+        <StatCard label={t('dash.entries')} value={cur ? `${cur.entries_up}/${cur.entries_total}` : '-'} />
+        <StatCard label={t('dash.bds')} value={cur ? `${cur.bds_up}/${cur.bds_total}` : '-'} />
+        <StatCard label={t('dash.total')} value={cur ? fmtBytes(cur.total_rx + cur.total_tx) : '-'} />
       </div>
       <div className="card">
-        <h3>流量速率</h3>
+        <h3>{t('dash.traffic')}</h3>
         <div className="legend">
-          <span><i style={{ background: 'var(--green)' }}></i>上行</span>
-          <span><i style={{ background: 'var(--accent)' }}></i>下行</span>
+          <span><i style={{ background: 'var(--green)' }}></i>{t('dash.upShort')}</span>
+          <span><i style={{ background: 'var(--accent)' }}></i>{t('dash.downShort')}</span>
         </div>
         <LineChart points={points} height={180} unit="/s" series={[
-          { key: 'rx_rate', color: '#3fb950', label: '上行' },
-          { key: 'tx_rate', color: '#58a6ff', label: '下行' },
+          { key: 'rx_rate', color: '#3fb950', label: t('dash.upShort') },
+          { key: 'tx_rate', color: '#58a6ff', label: t('dash.downShort') },
         ]} />
       </div>
       <div className="card">
-        <h3>活跃会话</h3>
+        <h3>{t('dash.sessionsChart')}</h3>
         <LineChart points={points} height={120} series={[
-          { key: 'sessions', color: '#d29922', label: '会话' },
+          { key: 'sessions', color: '#d29922', label: t('dash.sessions') },
         ]} />
       </div>
     </>

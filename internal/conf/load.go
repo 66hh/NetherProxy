@@ -60,6 +60,9 @@ func Default() *Conf {
 			StatusHistorySize: 500,
 			FlushInterval:     "30s",
 		},
+		Notify: NotifyConf{
+			Timeout: "5s",
+		},
 		Session: SessionConf{
 			SignaledTimeout:   "30s",
 			ActiveIdleTimeout: "120s",
@@ -131,6 +134,9 @@ func normalize(c *Conf) {
 	}
 	if c.Stats.FlushInterval == "" {
 		c.Stats.FlushInterval = "30s"
+	}
+	if c.Notify.Timeout == "" {
+		c.Notify.Timeout = "5s"
 	}
 }
 

@@ -17,6 +17,7 @@ import (
 
 	"NetherProxy/internal/conf"
 	"NetherProxy/internal/logger"
+	"NetherProxy/internal/notify"
 )
 
 // 线路心跳包: 代理主动发往线路的可达性探测, 数据面识别后直接回应 NPONG,
@@ -101,9 +102,10 @@ type EntryStats struct {
 
 // EntryTracker 跟踪各线路的心跳统计与可用状态, 统计持久化到独立 JSON 文件
 type EntryTracker struct {
-	store *conf.Store
-	mu    sync.RWMutex
-	stats map[string]*EntryStats
+	store    *conf.Store
+	notifier *notify.Notifier // 状态翻转时发送告警
+	mu       sync.RWMutex
+	stats    map[string]*EntryStats
 
 	path      string // 统计持久化文件路径
 	dirty     bool   // 有待落盘的变更
@@ -115,8 +117,8 @@ type EntryTracker struct {
 }
 
 // NewEntryTracker 创建跟踪器, 加载既有统计并启动后台落盘循环
-func NewEntryTracker(path string, store *conf.Store) *EntryTracker {
-	t := &EntryTracker{store: store, stats: make(map[string]*EntryStats), path: path}
+func NewEntryTracker(path string, store *conf.Store, notifier *notify.Notifier) *EntryTracker {
+	t := &EntryTracker{store: store, notifier: notifier, stats: make(map[string]*EntryStats), path: path}
 	t.load()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.cancel = cancel
@@ -266,7 +268,10 @@ func (s *EntryStats) appendHistory(ok bool, maxSize int) {
 
 // Record 记录一次探测结果。autoOffline 为 true 且连续失败达到 retries 时
 // 将线路标记为下线; 否则仅记录统计与日志, 不影响路由。
+// 无响应/恢复的状态翻转会触发 webhook 告警 (锁外异步发送)。
 func (t *EntryTracker) Record(key string, rtt time.Duration, probeErr error, manualOnly bool, retries int) {
+	var evt string
+	var fails int
 	t.mu.Lock()
 	s := t.stats[key]
 	if s == nil {
@@ -284,6 +289,7 @@ func (t *EntryTracker) Record(key string, rtt time.Duration, probeErr error, man
 		entryHeartbeatTotal.WithLabelValues(key, "failure").Inc()
 		if s.ConsecutiveFails >= retries && !s.unresponsive {
 			s.unresponsive = true
+			evt, fails = notify.EntryDown, s.ConsecutiveFails
 			if !manualOnly && s.Healthy {
 				s.Healthy = false
 				s.LastChange = time.Now()
@@ -294,6 +300,9 @@ func (t *EntryTracker) Record(key string, rtt time.Duration, probeErr error, man
 				"consecutive_fails", s.ConsecutiveFails, "manual_only", manualOnly, "err", probeErr)
 		}
 		t.mu.Unlock()
+		if evt != "" {
+			t.notifier.Send(evt, key, fails, probeErr.Error())
+		}
 		return
 	}
 
@@ -304,6 +313,7 @@ func (t *EntryTracker) Record(key string, rtt time.Duration, probeErr error, man
 	entryHeartbeatRTT.WithLabelValues(key).Set(rtt.Seconds())
 	if s.unresponsive {
 		s.unresponsive = false
+		evt = notify.EntryUp
 		logger.Info("entry responsive again", "entry", key, "rtt_ms", s.LastRTTMs)
 	}
 	if !s.Healthy {
@@ -314,6 +324,9 @@ func (t *EntryTracker) Record(key string, rtt time.Duration, probeErr error, man
 		logger.Info("entry back online", "entry", key)
 	}
 	t.mu.Unlock()
+	if evt != "" {
+		t.notifier.Send(evt, key, 0, "")
+	}
 }
 
 // Remove 移除线路统计并清理 Prometheus 序列 (线路从配置中删除时调用)

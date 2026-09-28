@@ -149,6 +149,11 @@ const dicts = {
     'cfg.f.session.tuple_stale_timeout': '5-tuple 软状态',
     'cfg.f.stats.status_history_size': '状态历史上限',
     'cfg.f.stats.flush_interval': '落盘合并间隔 (如 30s)',
+    'cfg.group.notify': '健康告警',
+    'cfg.f.notify.enable': '启用健康告警 webhook',
+    'cfg.f.notify.url': 'webhook 地址',
+    'cfg.f.notify.timeout': '调用超时',
+    'cfg.f.notify.on_recovery': '恢复时也通知',
   },
   en: {
     'common.save': 'Save',
@@ -287,6 +292,11 @@ const dicts = {
     'cfg.f.session.tuple_stale_timeout': '5-tuple soft state',
     'cfg.f.stats.status_history_size': 'Status history size',
     'cfg.f.stats.flush_interval': 'Flush merge interval (e.g. 30s)',
+    'cfg.group.notify': 'Health Alerts',
+    'cfg.f.notify.enable': 'Enable health alert webhook',
+    'cfg.f.notify.url': 'Webhook URL',
+    'cfg.f.notify.timeout': 'Call timeout',
+    'cfg.f.notify.on_recovery': 'Notify on recovery',
   },
   ja: {
     'common.save': '保存',
@@ -425,6 +435,11 @@ const dicts = {
     'cfg.f.session.tuple_stale_timeout': '5-tuple ソフトステート',
     'cfg.f.stats.status_history_size': '状態履歴の上限',
     'cfg.f.stats.flush_interval': 'フラッシュ間隔 (例 30s)',
+    'cfg.group.notify': 'ヘルスアラート',
+    'cfg.f.notify.enable': 'ヘルスアラート webhook を有効化',
+    'cfg.f.notify.url': 'webhook URL',
+    'cfg.f.notify.timeout': '呼び出しタイムアウト',
+    'cfg.f.notify.on_recovery': '回復時も通知',
   },
   ko: {
     'common.save': '저장',
@@ -563,6 +578,11 @@ const dicts = {
     'cfg.f.session.tuple_stale_timeout': '5-tuple 소프트 상태',
     'cfg.f.stats.status_history_size': '상태 기록 상한',
     'cfg.f.stats.flush_interval': '플러시 간격 (예 30s)',
+    'cfg.group.notify': '헬스 알림',
+    'cfg.f.notify.enable': '헬스 알림 webhook 활성화',
+    'cfg.f.notify.url': 'webhook URL',
+    'cfg.f.notify.timeout': '호출 타임아웃',
+    'cfg.f.notify.on_recovery': '복구 시에도 알림',
   },
 }
 

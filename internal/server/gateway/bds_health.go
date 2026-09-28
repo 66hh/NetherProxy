@@ -14,6 +14,7 @@ import (
 
 	"NetherProxy/internal/conf"
 	"NetherProxy/internal/logger"
+	"NetherProxy/internal/notify"
 )
 
 var (
@@ -65,13 +66,14 @@ type bdsStats struct {
 
 // bdsTracker 跟踪各 BDS 的健康统计与可用状态
 type bdsTracker struct {
-	store *conf.Store
-	mu    sync.RWMutex
-	stats map[string]*bdsStats
+	store    *conf.Store
+	notifier *notify.Notifier // 状态翻转时发送告警
+	mu       sync.RWMutex
+	stats    map[string]*bdsStats
 }
 
-func newBDSTracker(store *conf.Store) *bdsTracker {
-	return &bdsTracker{store: store, stats: make(map[string]*bdsStats)}
+func newBDSTracker(store *conf.Store, notifier *notify.Notifier) *bdsTracker {
+	return &bdsTracker{store: store, notifier: notifier, stats: make(map[string]*bdsStats)}
 }
 
 // bdsKey 返回 BDS 的标识 (host:port)
@@ -100,10 +102,12 @@ func (t *bdsTracker) snapshot() map[string]bdsStats {
 	return out
 }
 
-// record 记录一次探测结果, 语义与 EntryTracker.Record 一致
+// record 记录一次探测结果, 语义与 EntryTracker.Record 一致;
+// 无响应/恢复的状态翻转会触发 webhook 告警 (锁外异步发送)
 func (t *bdsTracker) record(key string, rtt time.Duration, probeErr error, manualOnly bool, retries int) {
+	var evt string
+	var fails int
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	s := t.stats[key]
 	if s == nil {
 		s = &bdsStats{Healthy: true, LastChange: time.Now()}
@@ -119,6 +123,7 @@ func (t *bdsTracker) record(key string, rtt time.Duration, probeErr error, manua
 		bdsProbeTotal.WithLabelValues(key, "failure").Inc()
 		if s.ConsecutiveFails >= retries && !s.unresponsive {
 			s.unresponsive = true
+			evt, fails = notify.BDSDown, s.ConsecutiveFails
 			if !manualOnly && s.Healthy {
 				s.Healthy = false
 				s.LastChange = time.Now()
@@ -126,6 +131,10 @@ func (t *bdsTracker) record(key string, rtt time.Duration, probeErr error, manua
 			}
 			logger.Error("bds unresponsive", "bds", key,
 				"consecutive_fails", s.ConsecutiveFails, "manual_only", manualOnly, "err", probeErr)
+		}
+		t.mu.Unlock()
+		if evt != "" {
+			t.notifier.Send(evt, key, fails, probeErr.Error())
 		}
 		return
 	}
@@ -137,6 +146,7 @@ func (t *bdsTracker) record(key string, rtt time.Duration, probeErr error, manua
 	bdsProbeRTT.WithLabelValues(key).Set(rtt.Seconds())
 	if s.unresponsive {
 		s.unresponsive = false
+		evt = notify.BDSUp
 		logger.Info("bds responsive again", "bds", key, "rtt_ms", s.LastRTTMs)
 	}
 	if !s.Healthy {
@@ -144,6 +154,10 @@ func (t *bdsTracker) record(key string, rtt time.Duration, probeErr error, manua
 		s.LastChange = time.Now()
 		bdsHealthy.WithLabelValues(key).Set(1)
 		logger.Info("bds back online", "bds", key)
+	}
+	t.mu.Unlock()
+	if evt != "" {
+		t.notifier.Send(evt, key, 0, "")
 	}
 }
 

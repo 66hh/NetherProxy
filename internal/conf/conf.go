@@ -194,12 +194,29 @@ type StatsConf struct {
 	FlushInterval     string `yaml:"flush_interval" json:"flush_interval"`           // 统计落盘合并间隔, 如 "30s"; 状态变化立即落盘
 }
 
+// 健康告警通知配置: 线路/BDS 连续探测失败达到阈值 (判定无响应) 时触发 webhook,
+// 恢复时是否通知由 on_recovery 控制。manual_only 的心跳也会触发 (人工处理需要知晓)。
+//
+// Webhook 请求契约:
+//
+//	POST <url>  Content-Type: application/json
+//	{"event":"entry_down","key":"1.2.3.4:19131","time":"2026-01-01T00:00:00+08:00","consecutive_fails":3,"error":"..."}
+//
+// event 取值: entry_down / entry_up / bds_down / bds_up
+type NotifyConf struct {
+	Enable     bool   `yaml:"enable" json:"enable"`           // 是否启用
+	URL        string `yaml:"url" json:"url"`                 // 告警接收地址
+	Timeout    string `yaml:"timeout" json:"timeout"`         // 调用超时, 如 "5s"; 空用默认 5s
+	OnRecovery bool   `yaml:"on_recovery" json:"on_recovery"` // 恢复时也发送通知
+}
+
 type Conf struct {
 	Log         LogConf         `yaml:"log" json:"log"`
 	Gateway     GatewayConf     `yaml:"gateway" json:"gateway"`
 	Multiplexer MultiplexerConf `yaml:"multiplexer" json:"multiplexer"`
 	Session     SessionConf     `yaml:"session" json:"session"`
 	Stats       StatsConf       `yaml:"stats" json:"stats"`
+	Notify      NotifyConf      `yaml:"notify" json:"notify"`
 	BDS         []BDSConf       `yaml:"bds" json:"bds"`
 	Entry       []EntryConf     `yaml:"entry" json:"entry"`
 }
@@ -398,6 +415,15 @@ func (c *Conf) Validate() error {
 	}
 	if d, err := time.ParseDuration(c.Stats.FlushInterval); err != nil || d <= 0 {
 		errs = append(errs, fmt.Errorf("stats.flush_interval: invalid duration %q", c.Stats.FlushInterval))
+	}
+
+	if c.Notify.Enable {
+		if c.Notify.URL == "" {
+			errs = append(errs, errors.New("notify.url: required when notify is enabled"))
+		}
+		if d, err := time.ParseDuration(c.Notify.Timeout); err != nil || d <= 0 {
+			errs = append(errs, fmt.Errorf("notify.timeout: invalid duration %q", c.Notify.Timeout))
+		}
 	}
 
 	return errors.Join(errs...)

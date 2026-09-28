@@ -1,5 +1,11 @@
 # NetherProxy
 
+**简体中文 | [English](README.en.md)**
+
+> **AI 辅助配置**：本仓库提供面向 AI 助手的配置指导文档 [docs/skill/netherproxy-setup.md](docs/skill/netherproxy-setup.md)。
+> 把它的完整内容粘贴给你的 AI 助手（或作为上下文文件提供），即可获得涵盖 NetherNet 协议、
+> 本项目工作原理与全部配置项用法的配置指导。
+
 Minecraft 基岩版 NetherNet 协议（WebRTC：ICE + DTLS + SCTP）的单端口复用边缘代理。
 
 公网仅暴露一个 UDP 端口承载全部玩家数据面，内网 BDS 与客户端均零改动，DTLS 与游戏层加密端到端保持——代理只转发，不终止。

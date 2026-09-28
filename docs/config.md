@@ -111,6 +111,19 @@ entry:
 | `status_history_size` | `500` | 每条线路/BDS 保留的探测历史上限 |
 | `flush_interval` | `30s` | 统计落盘合并间隔；状态变化立即落盘 |
 
+## notify — 健康告警 webhook（热更）
+
+线路/BDS 连续探测失败达到 `retries` 阈值（判定无响应）时，代理向 webhook POST 告警；`manual_only` 的心跳同样触发（人工处理需要知晓）。
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `enable` | `false` | 是否启用 |
+| `url` | 空 | 告警接收地址，启用时必填 |
+| `timeout` | `5s` | 调用超时 |
+| `on_recovery` | `false` | 恢复（`entry_up`/`bds_up`）时也发送通知 |
+
+发送失败仅记日志，不影响探测与路由。
+
 ## session — 会话超时（热更）
 
 | 字段 | 默认 | 说明 |

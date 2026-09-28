@@ -59,6 +59,12 @@ const SCHEMA = [
     ['stats.status_history_size', 'cfg.f.stats.status_history_size', 'number'],
     ['stats.flush_interval', 'cfg.f.stats.flush_interval', 'text'],
   ]},
+  { group: 'cfg.group.notify', fields: [
+    ['notify.enable', 'cfg.f.notify.enable', 'bool'],
+    ['notify.url', 'cfg.f.notify.url', 'text'],
+    ['notify.timeout', 'cfg.f.notify.timeout', 'text'],
+    ['notify.on_recovery', 'cfg.f.notify.on_recovery', 'bool'],
+  ]},
 ]
 
 function getPath(o, p) { return p.split('.').reduce((a, k) => (a == null ? a : a[k]), o) }

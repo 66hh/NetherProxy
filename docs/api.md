@@ -55,6 +55,27 @@ join 时代理向配置的外部服务发起判定请求：
 - `allow: false`、非 200 状态码、超时、网络错误一律视为**拒绝**（fail-closed）
 - 判定在身份验证通过之后执行，xuid/xname 可信
 
+## Webhook 契约（`notify`，健康告警）
+
+线路/BDS 判定无响应（连续失败达到阈值）时触发，恢复时是否触发由 `notify.on_recovery` 控制：
+
+**请求** `POST <notify.url>`，`Content-Type: application/json`：
+
+```json
+{
+  "event": "entry_down",
+  "key": "1.2.3.4:19131",
+  "time": "2026-01-01T00:00:00+08:00",
+  "consecutive_fails": 3,
+  "error": "read udp ...: i/o timeout"
+}
+```
+
+- `event`：`entry_down` / `entry_up` / `bds_down` / `bds_up`
+- `key`：线路或 BDS 的 `host:port` 标识
+- 恢复事件无 `consecutive_fails`/`error` 字段
+- 接收方返回任意 2xx 即可；失败仅记日志不重试
+
 ## 前端面板
 
 `GET /` 返回内嵌控制面板（无需认证加载页面，数据请求仍需 token）。

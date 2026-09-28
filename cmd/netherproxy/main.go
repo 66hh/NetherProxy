@@ -13,6 +13,7 @@ import (
 
 	"NetherProxy/internal/conf"
 	"NetherProxy/internal/logger"
+	"NetherProxy/internal/notify"
 	"NetherProxy/internal/server/gateway"
 	"NetherProxy/internal/server/multiplexer"
 	"NetherProxy/internal/session"
@@ -64,7 +65,8 @@ func run() int {
 
 	store := conf.NewStore(configPath, cfg)
 	table := session.NewTable(store)
-	tracker := multiplexer.NewEntryTracker(entryStatsPath, store)
+	notifier := notify.New(store)
+	tracker := multiplexer.NewEntryTracker(entryStatsPath, store, notifier)
 
 	mux := multiplexer.New(store, table, tracker)
 	if err := mux.Start(); err != nil {
@@ -77,7 +79,7 @@ func run() int {
 	heartbeat := multiplexer.NewHeartbeat(store, tracker)
 	heartbeat.Start()
 
-	gw := gateway.New(store, mux, tracker)
+	gw := gateway.New(store, mux, tracker, notifier)
 
 	// 打印面板地址与 token (normalize 已剥方括号并规范化主机字段)
 	panelHost := cfg.Gateway.Host

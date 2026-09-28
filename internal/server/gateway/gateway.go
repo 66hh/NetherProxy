@@ -21,6 +21,7 @@ import (
 
 	"NetherProxy/internal/conf"
 	"NetherProxy/internal/logger"
+	"NetherProxy/internal/notify"
 	"NetherProxy/internal/server/multiplexer"
 )
 
@@ -60,7 +61,7 @@ type Gateway struct {
 }
 
 // New 创建网关服务, 监听地址/TLS/metrics 开关取启动时配置, 之后重载不生效
-func New(store *conf.Store, mux *multiplexer.Multiplexer, tracker *multiplexer.EntryTracker) *Gateway {
+func New(store *conf.Store, mux *multiplexer.Multiplexer, tracker *multiplexer.EntryTracker, notifier *notify.Notifier) *Gateway {
 	cfg := store.Get().Gateway
 	router := gin.New()
 	// 不信任任何代理头 (X-Forwarded-For), ClientIP 直接取对端地址
@@ -77,7 +78,7 @@ func New(store *conf.Store, mux *multiplexer.Multiplexer, tracker *multiplexer.E
 
 	// NetherNet 信令端点, 客户端硬编码路径, 必须挂在根路径
 	balancer := newEntryBalancer(store, mux.Table(), tracker)
-	bdsTrack := newBDSTracker(store)
+	bdsTrack := newBDSTracker(store, notifier)
 	prober := newBDSProber(store, bdsTrack)
 	prober.start()
 	stats := newStatsSampler(store, mux.Table(), mux, tracker, bdsTrack)

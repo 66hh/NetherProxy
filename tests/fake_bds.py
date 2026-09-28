@@ -30,9 +30,7 @@ SDP_TEMPLATE = (
 )
 
 
-def udp_listener():
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.bind(("127.0.0.1", UDP_PORT))
+def udp_listener(sock):
     print(f"[fake-bds] udp echo on :{UDP_PORT}", flush=True)
     while True:
         data, addr = sock.recvfrom(65535)
@@ -74,6 +72,10 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    threading.Thread(target=udp_listener, daemon=True).start()
+    # UDP socket 在主线程先行 bind: 端口被占用时整个进程直接失败退出,
+    # 避免 HTTP 活着但数据面已死的半残实例误导测试
+    usock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    usock.bind(("127.0.0.1", UDP_PORT))
+    threading.Thread(target=udp_listener, args=(usock,), daemon=True).start()
     print(f"[fake-bds] http on :{HTTP_PORT}", flush=True)
     HTTPServer(("127.0.0.1", HTTP_PORT), Handler).serve_forever()

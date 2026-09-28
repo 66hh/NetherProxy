@@ -34,6 +34,20 @@ def api(method, path, token, body=None):
         return json.load(resp)
 
 
+def wait_bds_ready(proc, timeout=5):
+    """等待 fake bds 就绪; 进程提前退出 (如端口被残留实例占用) 直接报错"""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            sys.exit("fake_bds 启动失败, 端口可能被残留进程占用, 详见 tests/fake_bds.out")
+        try:
+            with urllib.request.urlopen("http://127.0.0.1:19501/v1/join", timeout=1):
+                return
+        except Exception:
+            time.sleep(0.2)
+    sys.exit("fake_bds 就绪超时")
+
+
 def main():
     token = read_token()
 
@@ -44,7 +58,7 @@ def main():
     bds = subprocess.Popen(
         [sys.executable, "tests/fake_bds.py"],
         stdout=bds_out, stderr=subprocess.STDOUT)
-    time.sleep(1)
+    wait_bds_ready(bds)
 
     try:
         # 热更: 关 JWT 验证, BDS 指向 fake, 关闭访问控制与限流, 固定 entry
@@ -77,6 +91,10 @@ def main():
         except Exception as e:
             print(f"恢复配置失败, 请检查 config.yml: {e}", file=sys.stderr)
         bds.terminate()
+        try:
+            bds.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            bds.kill()  # 兜底强杀, 防止残留占用端口
         bds_out.close()
 
     sys.exit(code)

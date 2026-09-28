@@ -5,6 +5,7 @@
 # 调试输出
 *.log
 *.pcap
+tests/fake_bds.out
 
 # 运行期生成的配置与统计
 /config.yml
